@@ -142,7 +142,7 @@ mount -o subvol=@var_log,compress=zstd "$ROOT_PART" /mnt/var/log
 mount -o subvol=@var_cache,compress=zstd "$ROOT_PART" /mnt/var/cache
 mount -o subvol=@swap "$ROOT_PART" /mnt/swap
 
-# Tạo swapfile 2GB
+# Swapfile 2GB
 btrfs filesystem mkswapfile --size 2g /mnt/swap/swapfile || true
 swapon /mnt/swap/swapfile || true
 
@@ -164,7 +164,7 @@ pacstrap -c -K /mnt \
     pipewire pipewire-pulse wireplumber \
     brightnessctl ddcutil cava aubio \
     libqalculate lm_sensors swappy \
-    ttf-jetbrains-mono-nerd ttf-cascadia-code-nerd noto-fonts-cjk noto-fonts-emoji \
+    ttf-rubik ttf-jetbrains-mono-nerd ttf-cascadia-code-nerd noto-fonts-cjk noto-fonts-emoji \
     grim slurp cliphist fuzzel wl-clipboard \
     greetd greetd-tuigreet \
     vim neovim fastfetch
@@ -237,20 +237,26 @@ command = "tuigreet --time --remember --remember-session --cmd Hyprland"
 user = "$USERNAME"
 EOF
 
-# Copy cấu hình Live sang user mới
-if [[ -d /etc/skel/.config ]]; then
-    mkdir -p "/mnt/home/$USERNAME/.config"
-    cp -a /etc/skel/.config/. "/mnt/home/$USERNAME/.config/"
+# Copy file .zshrc và .config từ live sang user mới
+if [[ -f /home/gay/.zshrc ]]; then
+    cp -a /home/gay/.zshrc "/mnt/home/$USERNAME/.zshrc"
+elif [[ -f /etc/skel/.zshrc ]]; then
+    cp -a /etc/skel/.zshrc "/mnt/home/$USERNAME/.zshrc"
+else
+    cat > "/mnt/home/$USERNAME/.zshrc" <<'ZSHRC'
+export PATH="$HOME/.local/bin:$PATH"
+fastfetch
+ZSHRC
 fi
+
 if [[ -d /home/gay/.config ]]; then
     mkdir -p "/mnt/home/$USERNAME/.config"
     cp -a /home/gay/.config/. "/mnt/home/$USERNAME/.config/" || true
 fi
 
-# Đảm bảo phân quyền toàn bộ thư mục home cho user
 arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME"
 
-echo "=== Step 10: Setup Chaotic-AUR, Paru & Caelestia ==="
+echo "=== Step 10: Setup Chaotic-AUR, Paru & Caelestia Desktop ==="
 cat > /mnt/root/setup-desktop.sh <<'AUR_SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -274,28 +280,42 @@ fi
 
 pacman -Sy --noconfirm
 
-# 2. Cài đặt Paru và Quickshell từ kho chính/Chaotic-AUR
+# 2. Cài đặt Paru, Quickshell & font Material Symbols
 pacman -S --needed --noconfirm paru quickshell || true
+runuser -u "$user" -- paru -S --noconfirm --needed \
+    caelestia-cli-git \
+    app2unit \
+    ttf-material-symbols-variable-git || true
 
-# 3. Dùng Paru để cài đặt các package AUR đặc thù của Caelestia
-runuser -u "$user" -- paru -S --noconfirm --needed caelestia-cli-git app2unit || true
-
-# 4. Clone và setup full Caelestia dotfiles
+# 3. Clone và setup full Caelestia dotfiles
 rm -rf "$home/.local/share/caelestia"
 runuser -u "$user" -- git clone https://github.com/caelestia-dots/caelestia.git "$home/.local/share/caelestia"
 
-if [[ -f "$home/.local/share/caelestia/install.fish" ]]; then
-    runuser -u "$user" -- fish "$home/.local/share/caelestia/install.fish" --noconfirm || true
-fi
-
-# 5. Clone shell widget nếu chưa có
+# 4. Clone shell widget vào quickshell
 mkdir -p "$home/.config/quickshell"
-chown -R "$user:$user" "$home/.config"
 if [[ ! -d "$home/.config/quickshell/caelestia" ]]; then
     runuser -u "$user" -- git clone https://github.com/caelestia-dots/shell.git "$home/.config/quickshell/caelestia"
 fi
 
-# Build beat_detector
+# 5. SYMLINK Cấu hình Caelestia chuẩn xác sang ~/.config của USER
+mkdir -p "$home/.config"
+if [[ -d "$home/.local/share/caelestia/hypr" ]]; then
+    rm -rf "$home/.config/hypr"
+    ln -sf "$home/.local/share/caelestia/hypr" "$home/.config/hypr"
+fi
+if [[ -d "$home/.local/share/caelestia/fastfetch" ]]; then
+    rm -rf "$home/.config/fastfetch"
+    ln -sf "$home/.local/share/caelestia/fastfetch" "$home/.config/fastfetch"
+fi
+
+# Đảm bảo Hyprland tự khởi động Quickshell Caelestia
+if [[ -f "$home/.config/hypr/hyprland.conf" ]]; then
+    if ! grep -q "caelestia" "$home/.config/hypr/hyprland.conf"; then
+        echo "exec-once = qs -c caelestia" >> "$home/.config/hypr/hyprland.conf"
+    fi
+fi
+
+# Build beat_detector cho audio visualizer
 mkdir -p /usr/lib/caelestia
 if [[ -f "$home/.config/quickshell/caelestia/assets/beat_detector.cpp" ]]; then
     g++ -std=c++17 -Wall -Wextra \
@@ -303,6 +323,13 @@ if [[ -f "$home/.config/quickshell/caelestia/assets/beat_detector.cpp" ]]; then
         -o /usr/lib/caelestia/beat_detector \
         "$home/.config/quickshell/caelestia/assets/beat_detector.cpp" \
         -lpipewire-0.3 -laubio || true
+fi
+
+# Cài đặt phông chữ nội bộ nếu có
+if [[ -d "$home/.config/quickshell/caelestia/assets/fonts" ]]; then
+    mkdir -p "$home/.local/share/fonts"
+    cp -r "$home/.config/quickshell/caelestia/assets/fonts/." "$home/.local/share/fonts/" || true
+    fc-cache -fv || true
 fi
 
 chown -R "$user:$user" "$home"
@@ -315,7 +342,7 @@ rm -f /mnt/root/setup-desktop.sh
 echo "=== Step 11: Configuring Snapper ==="
 umount /mnt/.snapshots 2>/dev/null || true
 rm -rf /mnt/.snapshots
-arch-chroot /mnt snapper -c root create-config / || true
+arch-chroot /mnt snapper --no-dbus -c root create-config / || true
 btrfs subvolume delete /mnt/.snapshots 2>/dev/null || true
 mkdir -p /mnt/.snapshots
 mount -o subvol=@snapshots,compress=zstd "$ROOT_PART" /mnt/.snapshots
