@@ -33,6 +33,5 @@ file_permissions=(
   ["/usr/local/bin/start-gayos-hyprland"]="0:0:755"
   ["/usr/local/bin/gayos-welcome"]="0:0:755"
   ["/usr/local/bin/gayos-first-run"]="0:0:755"
-  ["/usr/local/bin/gayos-install-caelestia"]="0:0:755"
   ["/usr/local/bin/gayos-install"]="0:0:755"
 )

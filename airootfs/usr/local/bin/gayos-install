@@ -3,12 +3,10 @@ set -euo pipefail
 
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-# Re-run as root if needed
 if [[ "${EUID}" -ne 0 ]]; then
     exec sudo -E /usr/local/bin/gayos-install "$@"
 fi
 
-# Helper: run command as the real user (for dialogs)
 REAL_USER="${SUDO_USER:-gay}"
 REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
 REAL_UID="$(id -u "$REAL_USER")"
@@ -26,47 +24,45 @@ run_zenity() {
         zenity "$@"
 }
 
-# --- Welcome & confirm ---
+# 1. Welcome dialog
 if ! run_zenity --question \
     --title="GayOS Installer" \
-    --text="Welcome to GayOS Installer!\n\nThis will install GayOS to your disk.\n\n⚠️ WARNING: All data on the selected disk will be erased.\n\nContinue only if you understand this." \
+    --text="Welcome to GayOS Installer!\n\nThis will install GayOS (Btrfs + Caelestia) to your disk.\n\n⚠️ WARNING: All data on the selected disk will be erased.\n\nContinue only if you understand this." \
     --ok-label="I AM GAY" \
     --cancel-label="Cancel" \
     --width=520; then
     exit 0
 fi
 
-# --- Disk selection ---
+# 2. Select disk
 DISK=$(run_zenity --list --radiolist \
     --title="Select Disk" \
     --text="Choose the disk to install GayOS.\nAll data on this disk will be erased." \
     --column="Select" --column="Disk" \
     TRUE "$(lsblk -ndo NAME,TYPE | awk '$2=="disk"{print "/dev/"$1}' | head -1)" \
     FALSE "$(lsblk -ndo NAME,TYPE | awk '$2=="disk"{print "/dev/"$1}' | tail -n +2 | head -1)" \
-    --width=400 --height=200)
+    --width=400 --height=220)
 
 if [[ -z "$DISK" ]]; then
     run_zenity --error --title="Error" --text="No disk selected. Installation aborted."
     exit 1
 fi
 
-# --- Hostname ---
+# 3. Hostname
 HOSTNAME=$(run_zenity --entry \
     --title="Hostname" \
     --text="Enter hostname for your GayOS system:" \
     --entry-text "gayos")
-
 [[ -z "$HOSTNAME" ]] && HOSTNAME="gayos"
 
-# --- Username ---
+# 4. Username
 USERNAME=$(run_zenity --entry \
     --title="Username" \
     --text="Enter your username:" \
     --entry-text "gay")
-
 [[ -z "$USERNAME" ]] && USERNAME="gay"
 
-# --- Password ---
+# 5. Password
 PASSWD1=$(run_zenity --entry --hide-text \
     --title="Password" \
     --text="Enter password for user '$USERNAME':")
@@ -79,40 +75,15 @@ if [[ "$PASSWD1" != "$PASSWD2" ]]; then
     run_zenity --error --title="Error" --text="Passwords do not match. Installation aborted."
     exit 1
 fi
-
 USER_PASSWORD="$PASSWD1"
 
-# --- Installation ---
-run_zenity --progress \
-    --title="Installing GayOS" \
-    --text="Preparing disk..." \
-    --percentage=0 \
-    --auto-close \
-    --auto-kill \
-    --width=400 &
-PID_ZENITY=$!
-
-step() {
-    local pct=$1
-    local msg=$2
-    echo "$pct"
-    run_zenity --progress \
-        --title="Installing GayOS" \
-        --text="$msg" \
-        --percentage="$pct" \
-        --auto-close \
-        --auto-kill \
-        --width=400 &
-    PID_ZENITY=$!
-}
-
-# 1. Wipe disk
-step 5 "Wiping disk $DISK..."
+echo "=== Step 1: Wiping disk $DISK ==="
+swapoff -a || true
+umount -R /mnt 2>/dev/null || true
 dd if=/dev/zero of="$DISK" bs=1M count=100 conv=notrunc || true
 wipefs -a "$DISK" || true
 
-# 2. Partition (UEFI + root)
-step 10 "Creating partitions..."
+echo "=== Step 2: Partitioning (UEFI + Btrfs) ==="
 sgdisk --clear "$DISK" \
     --new=1:1M:+512M --typecode=1:EF00 --change-name=1:"EFI" \
     --new=2:0:0 --typecode=2:8300 --change-name=2:"ROOT" \
@@ -121,53 +92,53 @@ sgdisk --clear "$DISK" \
 partprobe "$DISK" || udevadm settle || true
 sleep 2
 
-EFI_PART="${DISK}1"
-ROOT_PART="${DISK}2"
+# Support NVMe (/dev/nvme0n1p1) and standard disks (/dev/sda1)
+if [[ "$DISK" =~ [0-9]$ ]]; then
+    EFI_PART="${DISK}p1"
+    ROOT_PART="${DISK}p2"
+else
+    EFI_PART="${DISK}1"
+    ROOT_PART="${DISK}2"
+fi
 
-# 3. Format
-step 20 "Formatting partitions..."
+echo "=== Step 3: Formatting partitions ==="
 mkfs.fat -F32 "$EFI_PART"
 mkfs.btrfs -f "$ROOT_PART"
 
-# 4. Mount & create subvolumes
-step 30 "Creating Btrfs subvolumes..."
+echo "=== Step 4: Creating Btrfs subvolumes ==="
 mkdir -p /mnt
 mount "$ROOT_PART" /mnt
-
-# Subvolumes
 btrfs subvolume create /mnt/@
 btrfs subvolume create /mnt/@home
 btrfs subvolume create /mnt/@snapshots
-
-# Unmount and remount with subvolumes
+btrfs subvolume create /mnt/@var_log
+btrfs subvolume create /mnt/@var_cache
 umount /mnt
 
 mount -o subvol=@,compress=zstd "$ROOT_PART" /mnt
-mkdir -p /mnt/{boot,home,.snapshots}
+mkdir -p /mnt/{boot,home,.snapshots,var/log,var/cache}
 mount "$EFI_PART" /mnt/boot
 mount -o subvol=@home,compress=zstd "$ROOT_PART" /mnt/home
 mount -o subvol=@snapshots,compress=zstd "$ROOT_PART" /mnt/.snapshots
+mount -o subvol=@var_log,compress=zstd "$ROOT_PART" /mnt/var/log
+mount -o subvol=@var_cache,compress=zstd "$ROOT_PART" /mnt/var/cache
 
-# 5. Install base system
-step 40 "Installing base system..."
-pacstrap -C /etc/pacman.conf /mnt \
-    base linux linux-firmware \
-    networkmanager sudo zsh \
+echo "=== Step 5: pacstrap base packages ==="
+pacstrap -K /mnt \
+    base base-devel linux linux-firmware \
+    networkmanager sudo zsh git \
     grub efibootmgr \
     btrfs-progs snapper \
-    paru \
-    caelestia-shell \
-    vim neovim git \
-    base-devel \
-    || { run_zenity --error --title="Error" --text="pacstrap failed."; exit 1; }
+    rust cargo \
+    hyprland kitty \
+    pipewire pipewire-pulse wireplumber \
+    brightnessctl ddcutil cava \
+    vim neovim
 
-# 6. Generate fstab
-step 60 "Generating fstab..."
+echo "=== Step 6: Generating fstab ==="
 genfstab -U /mnt > /mnt/etc/fstab
 
-# 7. Configure system
-step 70 "Configuring system..."
-
+echo "=== Step 7: Configuring System ==="
 cat > /mnt/etc/hostname <<EOF
 $HOSTNAME
 EOF
@@ -181,59 +152,77 @@ EOF
 ln -sf /usr/share/zoneinfo/Asia/Ho_Chi_Minh /mnt/etc/localtime
 hwclock --systohc --utc
 
-# Locale
 cat > /mnt/etc/locale.conf <<EOF
 LANG=en_US.UTF-8
 EOF
 echo "en_US.UTF-8 UTF-8" > /mnt/etc/locale.gen
 arch-chroot /mnt locale-gen
 
-# 8. GRUB with Btrfs
-step 80 "Installing GRUB..."
+echo "=== Step 8: Installing GRUB ==="
 arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GayOS
 arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
-# 9. Sudo
-step 85 "Configuring sudo..."
+echo "=== Step 9: Configuring sudoers ==="
 mkdir -p /mnt/etc/sudoers.d
-cat > /mnt/etc/sudoers.d/99-gay <<'SUDOERS'
-%wheel ALL=(ALL) NOPASSWD: ALL
+cat > /mnt/etc/sudoers.d/99-wheel <<'SUDOERS'
+%wheel ALL=(ALL:ALL) ALL
+%wheel ALL=(ALL:ALL) NOPASSWD: ALL
 SUDOERS
-chmod 0440 /mnt/etc/sudoers.d/99-gay
+chmod 0440 /mnt/etc/sudoers.d/99-wheel
 
-# 10. Create user
-step 90 "Creating user..."
+echo "=== Step 10: Creating User ==="
 arch-chroot /mnt useradd -m -G wheel,audio,video,input,network -s /bin/zsh "$USERNAME"
 echo "$USERNAME:$USER_PASSWORD" | arch-chroot /mnt chpasswd
 
-# 11. Snapper config (root)
-step 93 "Configuring Snapper..."
-arch-chroot /mnt snapper -c root create-config /
-# Enable timeline & cleanup (optional, có thể tinh chỉnh sau)
-cat > /mnt/etc/snapper/configs/root <<'SNAPPER'
-QGROUP="1/0"
-SUBVOLUME="/@"
-TIMELINE_CREATE="yes"
-TIMELINE_LIMIT_HOURLY="1"
-TIMELINE_LIMIT_DAILY="2"
-TIMELINE_LIMIT_WEEKLY="0"
-TIMELINE_LIMIT_MONTHLY="0"
-NUMBER_LIMIT="2-10"
-NUMBER_LIMIT_IMPORTANT="4-10"
-SNAPPER
+# Copy desktop/skel configuration
+if [[ -d /etc/skel/.config ]]; then
+    mkdir -p "/mnt/home/$USERNAME/.config"
+    cp -a /etc/skel/.config/. "/mnt/home/$USERNAME/.config/"
+    arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.config"
+fi
 
-# 12. Enable services
-step 95 "Enabling services..."
+echo "=== Step 11: Building paru and Caelestia Shell (AUR) ==="
+cat > /mnt/root/build-aur.sh <<'AUR_SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+user="$1"
+home="/home/$user"
+
+export HOME="$home"
+cd "$home"
+
+# 1. Build & install paru
+rm -rf "$home/paru"
+runuser -u "$user" -- git clone --depth=1 https://aur.archlinux.org/paru.git "$home/paru"
+cd "$home/paru"
+runuser -u "$user" -- makepkg -si --noconfirm --needed
+cd "$home"
+rm -rf "$home/paru"
+
+# 2. Install Caelestia Shell via paru
+runuser -u "$user" -- paru -S --noconfirm --needed caelestia-shell || true
+AUR_SCRIPT
+
+chmod 755 /mnt/root/build-aur.sh
+arch-chroot /mnt /root/build-aur.sh "$USERNAME"
+rm -f /mnt/root/build-aur.sh
+
+echo "=== Step 12: Configuring Snapper ==="
+umount /mnt/.snapshots || true
+rm -rf /mnt/.snapshots
+arch-chroot /mnt snapper -c root create-config /
+btrfs subvolume delete /mnt/.snapshots || true
+mkdir -p /mnt/.snapshots
+mount -o subvol=@snapshots,compress=zstd "$ROOT_PART" /mnt/.snapshots
+chmod 750 /mnt/.snapshots
+
+echo "=== Step 13: Enabling Services ==="
 arch-chroot /mnt systemctl enable NetworkManager.service
-arch-chroot /mnt systemctl enable snapper-timeline.timer
-arch-chroot /mnt systemctl enable snapper-cleanup.timer
+arch-chroot /mnt systemctl enable snapper-timeline.timer || true
+arch-chroot /mnt systemctl enable snapper-cleanup.timer || true
 arch-chroot /mnt systemctl set-default graphical.target
 
-# 13. Done
-step 100 "Installation complete!"
-sleep 2
-kill $PID_ZENITY 2>/dev/null || true
-
+echo "=== Installation Finished ==="
 run_zenity --info \
     --title="GayOS Installer" \
     --text="GayOS has been installed successfully!\n\nPlease reboot your system now."
