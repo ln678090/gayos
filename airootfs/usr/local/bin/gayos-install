@@ -24,10 +24,10 @@ run_zenity() {
         zenity "$@"
 }
 
-# 1. Welcome
+# 1. Welcome dialog
 if ! run_zenity --question \
     --title="GayOS Installer" \
-    --text="Welcome to GayOS Installer!\n\nThis will install GayOS (Btrfs + Full Caelestia Desktop via Paru).\n\n⚠️ WARNING: All data on the selected disk will be erased.\n\nContinue only if you understand this." \
+    --text="Welcome to GayOS Installer!\n\nThis will install GayOS (Btrfs + Caelestia Desktop) to your disk.\n\n⚠️ WARNING: All data on the selected disk will be erased.\n\nContinue only if you understand this." \
     --ok-label="I AM GAY" \
     --cancel-label="Cancel" \
     --width=520; then
@@ -150,14 +150,14 @@ mount --bind /mnt/var/cache/pacman/pkg /var/cache/pacman/pkg
 echo "=== Step 5: pacstrap packages ==="
 pacstrap -c -K /mnt \
     base linux linux-firmware \
-    base-devel rust cargo networkmanager sudo zsh fish git \
+    base-devel rust networkmanager sudo zsh fish git \
     grub efibootmgr \
     btrfs-progs snapper \
     hyprland xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
     kitty \
     pipewire pipewire-pulse wireplumber \
     brightnessctl ddcutil cava aubio \
-    app2unit libqalculate lm_sensors swappy \
+    libqalculate lm_sensors swappy \
     ttf-jetbrains-mono-nerd ttf-cascadia-code-nerd noto-fonts-cjk noto-fonts-emoji \
     grim slurp cliphist fuzzel wl-clipboard \
     greetd greetd-tuigreet \
@@ -166,7 +166,7 @@ pacstrap -c -K /mnt \
 echo "=== Step 6: Generating fstab ==="
 genfstab -U /mnt > /mnt/etc/fstab
 
-echo "=== Step 7: Configuring System ==="
+echo "=== Step 7: Configuring System & GayOS Branding ==="
 cat > /mnt/etc/hostname <<EOF
 $HOSTNAME
 EOF
@@ -177,6 +177,20 @@ cat > /mnt/etc/hosts <<EOF
 127.0.0.1   $HOSTNAME
 EOF
 
+# GayOS os-release branding cho fastfetch nhận diện
+cat > /mnt/etc/os-release <<'OSREL'
+NAME="GayOS"
+PRETTY_NAME="GayOS Linux"
+ID=gayos
+ID_LIKE=arch
+BUILD_ID=rolling
+ANSI_COLOR="38;2;255;105;180"
+HOME_URL="https://github.com/gayos"
+SUPPORT_URL="https://github.com/gayos"
+BUG_REPORT_URL="https://github.com/gayos"
+LOGO=archlinux
+OSREL
+
 ln -sf /usr/share/zoneinfo/Asia/Ho_Chi_Minh /mnt/etc/localtime
 hwclock --systohc --utc
 
@@ -186,7 +200,10 @@ EOF
 echo "en_US.UTF-8 UTF-8" > /mnt/etc/locale.gen
 arch-chroot /mnt locale-gen
 
-echo "=== Step 8: Installing GRUB ==="
+echo "=== Step 8: Installing GRUB with GayOS Name ==="
+# Sửa tên hiển thị menu boot thành GayOS
+sed -i 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="GayOS"/' /mnt/etc/default/grub || true
+
 if [[ "$IS_UEFI" = true ]]; then
     arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GayOS --removable
 else
@@ -216,7 +233,17 @@ command = "tuigreet --time --remember --remember-session --cmd Hyprland"
 user = "$USERNAME"
 EOF
 
-echo "=== Step 10: Building paru (Source) & Installing Caelestia ==="
+# Copy cấu hình Live sang user mới (fastfetch, wallpaper, v.v.)
+if [[ -d /etc/skel/.config ]]; then
+    mkdir -p "/mnt/home/$USERNAME/.config"
+    cp -a /etc/skel/.config/. "/mnt/home/$USERNAME/.config/"
+fi
+if [[ -d /home/gay/.config ]]; then
+    mkdir -p "/mnt/home/$USERNAME/.config"
+    cp -a /home/gay/.config/. "/mnt/home/$USERNAME/.config/" || true
+fi
+
+echo "=== Step 10: Building paru & Installing Caelestia ==="
 cat > /mnt/root/build-caelestia.sh <<'AUR_SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -226,7 +253,7 @@ home="/home/$user"
 export HOME="$home"
 cd "$home"
 
-# 1. Build Paru từ source (paru-git) - hoàn toàn tương thích với hệ thống
+# 1. Build Paru từ source tương thích hoàn toàn
 rm -rf "$home/paru-git"
 runuser -u "$user" -- git clone --depth=1 https://aur.archlinux.org/paru-git.git "$home/paru-git"
 cd "$home/paru-git"
@@ -234,10 +261,13 @@ runuser -u "$user" -- makepkg -si --noconfirm --needed
 cd "$home"
 rm -rf "$home/paru-git"
 
-# 2. Dùng chính paru để cài đặt các package Caelestia từ AUR
-runuser -u "$user" -- paru -S --noconfirm --needed quickshell-git caelestia-cli-git || true
+# 2. Cài các package AUR cho Caelestia
+runuser -u "$user" -- paru -S --noconfirm --needed \
+    quickshell-git \
+    caelestia-cli-git \
+    app2unit || true
 
-# 3. Clone & cài đặt dotfiles Caelestia chính thức
+# 3. Clone & chạy install dotfiles Caelestia
 rm -rf "$home/.local/share/caelestia"
 runuser -u "$user" -- git clone https://github.com/caelestia-dots/caelestia.git "$home/.local/share/caelestia"
 
