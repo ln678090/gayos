@@ -287,18 +287,20 @@ runuser -u "$user" -- paru -S --noconfirm --needed \
     app2unit \
     ttf-rubik-vf || true
 
+# Tạo thư mục và set toàn quyền cho user trước khi git clone
+mkdir -p "$home/.local/share" "$home/.config/quickshell" "$home/.local/bin"
+chown -R "$user:$user" "$home"
+
 # 3. Clone và setup full Caelestia dotfiles
 rm -rf "$home/.local/share/caelestia"
 runuser -u "$user" -- git clone https://github.com/caelestia-dots/caelestia.git "$home/.local/share/caelestia"
 
 # 4. Clone shell widget vào quickshell
-mkdir -p "$home/.config/quickshell"
 if [[ ! -d "$home/.config/quickshell/caelestia" ]]; then
     runuser -u "$user" -- git clone https://github.com/caelestia-dots/shell.git "$home/.config/quickshell/caelestia"
 fi
 
 # 5. SYMLINK Cấu hình Caelestia sang ~/.config của USER
-mkdir -p "$home/.config"
 if [[ -d "$home/.local/share/caelestia/hypr" ]]; then
     rm -rf "$home/.config/hypr"
     ln -sf "$home/.local/share/caelestia/hypr" "$home/.config/hypr"
