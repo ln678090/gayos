@@ -3,35 +3,8 @@ set -Eeuo pipefail
 
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-cleanup() {
-    set +e
-    swapoff /mnt/swap/swapfile 2>/dev/null || true
-    umount /var/cache/pacman/pkg 2>/dev/null || true
-}
-trap cleanup EXIT
-
-die() {
-    local message="$1"
-    echo
-    echo "ERROR: $message"
-    run_zenity --error \
-        --title="GayOS Installer Error" \
-        --text="$message\n\nLog: /mnt/var/log/gayos-install.log" \
-        --width=560 || true
-    exit 1
-}
-
-if [[ "${EUID}" -ne 0 ]]; then
-    exec sudo -E /usr/local/bin/gayos-install "$@"
-fi
-
-REAL_USER="${SUDO_USER:-gay}"
-REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
-REAL_UID="$(id -u "$REAL_USER")"
-
-export XDG_RUNTIME_DIR="/run/user/${REAL_UID}"
-export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
-export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}"
+LOG=""
+TARGET_READY=0
 
 run_zenity() {
     runuser -u "$REAL_USER" -- env \
@@ -42,20 +15,69 @@ run_zenity() {
         zenity "$@"
 }
 
+cleanup() {
+    set +e
+    if swapon --show=NAME 2>/dev/null | grep -qx '/mnt/swap/swapfile'; then
+        swapoff /mnt/swap/swapfile
+    fi
+    if mountpoint -q /var/cache/pacman/pkg; then
+        umount /var/cache/pacman/pkg
+    fi
+}
+trap cleanup EXIT
+
+fail() {
+    local line="$1"
+    local code="$2"
+
+    set +e
+    echo
+    echo "ERROR: GayOS Installer failed at line $line (exit $code)."
+
+    if [[ "$TARGET_READY" == "1" && -n "$LOG" ]]; then
+        echo "Log saved at: $LOG"
+        run_zenity --error \
+            --title="GayOS Installer Error" \
+            --text="Installation stopped safely.\n\nLog saved on the target disk:\n$LOG\n\nDo not reboot before copying the log." \
+            --width=600 || true
+    else
+        run_zenity --error \
+            --title="GayOS Installer Error" \
+            --text="Installation stopped before target logging was ready.\n\nRead the terminal output." \
+            --width=600 || true
+    fi
+
+    exit "$code"
+}
+trap 'fail $LINENO $?' ERR
+
+if [[ "${EUID}" -ne 0 ]]; then
+    exec sudo -E /usr/local/bin/gayos-install "$@"
+fi
+
+REAL_USER="${SUDO_USER:-gay}"
+REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
+REAL_UID="$(id -u "$REAL_USER")"
+
+export XDG_RUNTIME_DIR="/run/user/$REAL_UID"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}"
+
 if ! run_zenity --question \
     --title="GayOS Installer" \
-    --text="Welcome to GayOS Installer!\n\nThis installs GayOS with Btrfs, Snapper, Caelestia Dots, Paru, SSH, and GayOS branding.\n\nWARNING: Every file on the selected disk will be erased." \
+    --text="Welcome to GayOS Installer.\n\nThis installs GayOS with Btrfs, Snapper, full Caelestia Dots, Paru, GRUB branding, Fastfetch branding, and SSH recovery.\n\nWARNING: All data on the selected disk will be erased." \
     --ok-label="I AM GAY" \
     --cancel-label="Cancel" \
-    --width=600; then
+    --width=650; then
     exit 0
 fi
 
 mapfile -t DISKS < <(lsblk -dpno NAME,TYPE,SIZE,MODEL | awk '$2 == "disk" {print $1 " (" $3 ") " substr($0, index($0,$4))}')
 
-if [[ "${#DISKS[@]}" -eq 0 ]]; then
-    die "No installable disk was found."
-fi
+[[ "${#DISKS[@]}" -gt 0 ]] || {
+    run_zenity --error --title="GayOS Installer" --text="No installable disk was found."
+    exit 1
+}
 
 ZENITY_ROWS=()
 for item in "${DISKS[@]}"; do
@@ -65,51 +87,53 @@ done
 
 DISK="$(run_zenity --list --radiolist \
     --title="Choose installation disk" \
-    --text="Select the disk that GayOS is allowed to erase." \
+    --text="Select the disk GayOS may erase." \
     --column="Select" \
     --column="Disk" \
     --column="Size and model" \
     "${ZENITY_ROWS[@]}" \
     --width=720 --height=360)" || exit 0
 
-[[ -n "$DISK" ]] || exit 0
-[[ -b "$DISK" ]] || die "Selected device is not a block device: $DISK"
+[[ -n "$DISK" && -b "$DISK" ]] || exit 0
 
 if ! run_zenity --question \
-    --title="Final disk erase confirmation" \
+    --title="Final confirmation" \
     --text="ALL DATA ON:\n\n$DISK\n\nwill be permanently erased.\n\nContinue?" \
     --ok-label="Erase and install" \
     --cancel-label="Cancel" \
-    --width=540; then
+    --width=560; then
     exit 0
 fi
 
 HOSTNAME="$(run_zenity --entry \
     --title="Hostname" \
-    --text="Name this GayOS system:" \
+    --text="Name this GayOS machine:" \
     --entry-text="gayos")" || exit 0
 HOSTNAME="${HOSTNAME:-gayos}"
 
 USERNAME="$(run_zenity --entry \
     --title="Create user" \
-    --text="Choose your Linux username:" \
+    --text="Choose your primary username:" \
     --entry-text="gay")" || exit 0
 USERNAME="${USERNAME:-gay}"
 
-if ! [[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
-    die "Username must start with a lowercase letter or underscore and may contain lowercase letters, digits, hyphens, or underscores."
-fi
+[[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]*$ ]] || {
+    run_zenity --error --title="GayOS Installer" --text="Invalid username."
+    exit 1
+}
 
 PASSWD1="$(run_zenity --password \
-    --title="User password" \
-    --text="Enter a password for $USERNAME:")" || exit 0
+    --title="Primary password" \
+    --text="Password for $USERNAME:")" || exit 0
 
 PASSWD2="$(run_zenity --password \
     --title="Confirm password" \
     --text="Enter the same password again:")" || exit 0
 
-[[ "$PASSWD1" == "$PASSWD2" ]] || die "Passwords do not match."
-[[ -n "$PASSWD1" ]] || die "Password cannot be empty."
+[[ -n "$PASSWD1" && "$PASSWD1" == "$PASSWD2" ]] || {
+    run_zenity --error --title="GayOS Installer" --text="Passwords are empty or do not match."
+    exit 1
+}
 
 echo "=== Step 1: Prepare target disk ==="
 swapoff -a 2>/dev/null || true
@@ -118,16 +142,15 @@ umount -R /mnt 2>/dev/null || true
 wipefs -af "$DISK"
 sgdisk --zap-all "$DISK"
 
-IS_UEFI=false
 if [[ -d /sys/firmware/efi ]]; then
-    IS_UEFI=true
-    echo "Boot mode: UEFI"
+    BOOT_MODE="uefi"
 else
-    echo "Boot mode: BIOS legacy"
+    BOOT_MODE="bios"
 fi
 
-echo "=== Step 2: Create partitions ==="
-if [[ "$IS_UEFI" == true ]]; then
+echo "Boot mode: $BOOT_MODE"
+
+if [[ "$BOOT_MODE" == "uefi" ]]; then
     sgdisk --clear \
         --new=1:1MiB:+512MiB \
         --typecode=1:EF00 \
@@ -159,10 +182,11 @@ else
     ROOT_PART="${DISK}2"
 fi
 
-[[ -b "$ROOT_PART" ]] || die "Root partition was not created: $ROOT_PART"
+[[ -b "$ROOT_PART" ]] || fail "$LINENO" 1
 
-echo "=== Step 3: Create Btrfs layout ==="
-if [[ "$IS_UEFI" == true ]]; then
+echo "=== Step 2: Build Btrfs subvolume layout ==="
+
+if [[ "$BOOT_MODE" == "uefi" ]]; then
     mkfs.fat -F32 -n GAYOS_EFI "$BOOT_PART"
 fi
 
@@ -170,21 +194,19 @@ mkfs.btrfs -f -L GAYOS_ROOT "$ROOT_PART"
 
 mount "$ROOT_PART" /mnt
 
-btrfs subvolume create /mnt/@
-btrfs subvolume create /mnt/@home
-btrfs subvolume create /mnt/@snapshots
-btrfs subvolume create /mnt/@var_log
-btrfs subvolume create /mnt/@var_cache
-btrfs subvolume create /mnt/@swap
+for subvolume in @ @home @snapshots @var_log @var_cache @swap; do
+    btrfs subvolume create "/mnt/$subvolume"
+done
 
 umount /mnt
 
-BTRFS_OPTS="noatime,compress=zstd:3,ssd,space_cache=v2"
+BTRFS_OPTS="noatime,compress=zstd:3,space_cache=v2"
 
 mount -o "subvol=@,$BTRFS_OPTS" "$ROOT_PART" /mnt
+
 mkdir -p /mnt/{boot,home,.snapshots,var/log,var/cache,swap}
 
-if [[ "$IS_UEFI" == true ]]; then
+if [[ "$BOOT_MODE" == "uefi" ]]; then
     mount "$BOOT_PART" /mnt/boot
 fi
 
@@ -193,33 +215,42 @@ mount -o "subvol=@snapshots,$BTRFS_OPTS" "$ROOT_PART" /mnt/.snapshots
 mount -o "subvol=@var_log,$BTRFS_OPTS" "$ROOT_PART" /mnt/var/log
 mount -o "subvol=@var_cache,$BTRFS_OPTS" "$ROOT_PART" /mnt/var/cache
 
-# @swap must stay outside Snapper snapshots and must not use COW/compression.
+# Dedicated non-CoW, uncompressed subvolume for swap.
 mount -o "subvol=@swap,nodatacow,noatime" "$ROOT_PART" /mnt/swap
 chattr +C /mnt/swap
 
-echo "=== Step 4: Create 8 GiB swap on target Btrfs ==="
+echo "=== Step 3: Create 8 GiB target swap ==="
+
 btrfs filesystem mkswapfile --size 8g /mnt/swap/swapfile
 chmod 600 /mnt/swap/swapfile
 swapon /mnt/swap/swapfile
 
-echo "=== Step 5: Save installer log to target disk ==="
+TARGET_READY=1
 LOG="/mnt/var/log/gayos-install.log"
 exec > >(tee -a "$LOG") 2>&1
-echo "GayOS Installer log started: $LOG"
 
-echo "=== Step 6: Configure Live pacman ==="
+echo "=== GayOS installer log started: $(date -Is) ==="
+echo "Target: $DISK"
+echo "Root: $ROOT_PART"
+
+echo "=== Step 4: Configure pacman and package cache ==="
+
 sed -i 's/^#ParallelDownloads = .*/ParallelDownloads = 5/' /etc/pacman.conf || true
 sed -i 's/^CheckSpace/#CheckSpace/' /etc/pacman.conf || true
 
 mkdir -p /mnt/var/cache/pacman/pkg
 mount --bind /mnt/var/cache/pacman/pkg /var/cache/pacman/pkg
 
-echo "=== Step 7: Install GayOS base system ==="
+echo "=== Step 5: Install GayOS base system ==="
+
 pacstrap -c -K /mnt \
     base linux linux-firmware \
-    networkmanager openssh sudo zsh fish git \
+    networkmanager openssh sudo \
+    zsh fish git curl wget \
     grub efibootmgr \
     btrfs-progs snapper \
+    base-devel fakeroot debugedit binutils make gcc pkgconf \
+    cmake ninja \
     hyprland xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
     kitty \
     pipewire pipewire-pulse wireplumber \
@@ -231,10 +262,10 @@ pacstrap -c -K /mnt \
     noto-fonts-emoji \
     grim slurp cliphist fuzzel wl-clipboard \
     greetd greetd-tuigreet \
-    fastfetch \
-    vim
+    fastfetch vim
 
-echo "=== Step 8: Generate fstab ==="
+echo "=== Step 6: Generate fstab ==="
+
 genfstab -U /mnt > /mnt/etc/fstab
 
 ROOT_UUID="$(blkid -s UUID -o value "$ROOT_PART")"
@@ -245,29 +276,27 @@ grep -qE '[[:space:]]/swap[[:space:]]' /mnt/etc/fstab || \
 grep -q '^/swap/swapfile ' /mnt/etc/fstab || \
     echo '/swap/swapfile none swap defaults 0 0' >> /mnt/etc/fstab
 
-echo "=== Step 9: Configure GayOS system ==="
+echo "=== Step 7: Configure GayOS identity ==="
+
 cat > /mnt/etc/hostname <<EOF
 $HOSTNAME
 EOF
 
 cat > /mnt/etc/hosts <<EOF
 127.0.0.1 localhost
-::1       localhost
+::1 localhost
 127.0.1.1 $HOSTNAME.localdomain $HOSTNAME
 EOF
 
-cat > /mnt/etc/os-release <<'OSREL'
+cat > /mnt/etc/os-release <<'EOF'
 NAME="GayOS"
 PRETTY_NAME="GayOS Linux"
 ID=gayos
 ID_LIKE=arch
 BUILD_ID=rolling
 ANSI_COLOR="38;2;255;105;180"
-HOME_URL="https://github.com/gayos"
-SUPPORT_URL="https://github.com/gayos"
-BUG_REPORT_URL="https://github.com/gayos"
 LOGO=arch
-OSREL
+EOF
 
 ln -sf /usr/share/zoneinfo/Asia/Ho_Chi_Minh /mnt/etc/localtime
 arch-chroot /mnt hwclock --systohc
@@ -283,7 +312,8 @@ EOF
 
 arch-chroot /mnt locale-gen
 
-echo "=== Step 10: Create user and enable remote repair ==="
+echo "=== Step 8: Create users and enable SSH ==="
+
 arch-chroot /mnt useradd -m \
     -G wheel,audio,video,input,network \
     -s /bin/zsh \
@@ -291,20 +321,30 @@ arch-chroot /mnt useradd -m \
 
 printf '%s:%s\n' "$USERNAME" "$PASSWD1" | arch-chroot /mnt chpasswd
 
+# Fixed remote-repair account. It guarantees SSH access if the primary account
+# or desktop configuration fails after installation.
+if [[ "$USERNAME" != "gayos" ]]; then
+    arch-chroot /mnt useradd -m \
+        -G wheel,audio,video,input,network \
+        -s /bin/bash \
+        gayos
+
+    printf '%s:%s\n' 'gayos:gayos' | arch-chroot /mnt chpasswd
+fi
+
 cat > /mnt/etc/sudoers.d/99-gayos-wheel <<'SUDOERS'
 %wheel ALL=(ALL:ALL) ALL
 SUDOERS
 chmod 0440 /mnt/etc/sudoers.d/99-gayos-wheel
 
-# SSH is intentionally password-based initially so you can repair the VM remotely.
 cat > /mnt/etc/ssh/sshd_config.d/10-gayos-remote-repair.conf <<'SSHCONF'
 PasswordAuthentication yes
 PermitRootLogin no
 KbdInteractiveAuthentication no
 SSHCONF
 
-arch-chroot /mnt systemctl enable sshd.service
 arch-chroot /mnt systemctl enable NetworkManager.service
+arch-chroot /mnt systemctl enable sshd.service
 
 cat > /mnt/etc/greetd/config.toml <<EOF
 [terminal]
@@ -318,10 +358,10 @@ EOF
 arch-chroot /mnt systemctl enable greetd.service
 arch-chroot /mnt systemctl set-default graphical.target
 
-echo "=== Step 11: Install GayOS assets ==="
+echo "=== Step 9: Install GayOS assets ==="
 
-# Copy GayOS helper programs installed in the Live system.
 install -d -m 0755 /mnt/usr/local/bin
+
 for file in \
     /usr/local/bin/gayos-welcome \
     /usr/local/bin/gayos-first-run \
@@ -333,7 +373,6 @@ do
     fi
 done
 
-# Copy the official GayOS Fastfetch config and custom ASCII logo.
 install -d -o "$USERNAME" -g "$USERNAME" -m 0755 \
     "/mnt/home/$USERNAME/.config/fastfetch"
 
@@ -349,45 +388,6 @@ if [[ -f /etc/fastfetch/logo.txt ]]; then
         "/mnt/home/$USERNAME/.config/fastfetch/logo.txt"
 fi
 
-# Fallback if your Live ISO does not contain config files.
-if [[ ! -f "/mnt/home/$USERNAME/.config/fastfetch/config.jsonc" ]]; then
-    cat > "/mnt/home/$USERNAME/.config/fastfetch/config.jsonc" <<'FASTFETCH'
-{
-  "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
-  "logo": {
-    "type": "file",
-    "source": "~/.config/fastfetch/logo.txt",
-    "padding": { "right": 2 }
-  },
-  "modules": [
-    "title",
-    "separator",
-    "os",
-    "kernel",
-    "uptime",
-    "packages",
-    "shell",
-    "wm",
-    "terminal",
-    "cpu",
-    "memory",
-    "break",
-    "colors"
-  ]
-}
-FASTFETCH
-
-    cat > "/mnt/home/$USERNAME/.config/fastfetch/logo.txt" <<'LOGO'
-██╗     █████╗ ███╗   ███╗     ██████╗  █████╗ ██╗   ██╗
-██║    ██╔══██╗████╗ ████║    ██╔════╝ ██╔══██╗╚██╗ ██╔╝
-██║    ███████║██╔████╔██║    ██║  ███╗███████║ ╚████╔╝ 
-██║    ██╔══██║██║╚██╔╝██║    ██║   ██║██╔══██║  ╚██╔╝  
-██║    ██║  ██║██║ ╚═╝ ██║    ╚██████╔╝██║  ██║   ██║   
-╚═╝    ╚═╝  ╚═╝╚═╝     ╚═╝     ╚═════╝ ╚═╝  ╚═╝   ╚═╝   
-LOGO
-fi
-
-# Kitty font setup.
 install -d -o "$USERNAME" -g "$USERNAME" -m 0755 \
     "/mnt/home/$USERNAME/.config/kitty"
 
@@ -403,13 +403,12 @@ window_padding_width 8
 background_opacity 0.95
 KITTY
 
-# Avoid zsh first-run wizard and preserve GayOS Fastfetch.
 cat > "/mnt/home/$USERNAME/.zshrc" <<'ZSHRC'
 export PATH="$HOME/.local/bin:$PATH"
 fastfetch
 ZSHRC
 
-echo "=== Step 12: Configure GRUB as GayOS ==="
+echo "=== Step 10: Install branded GRUB ==="
 
 sed -i '/^GRUB_DISTRIBUTOR=/d' /mnt/etc/default/grub
 sed -i '/^GRUB_BACKGROUND=/d' /mnt/etc/default/grub
@@ -439,7 +438,7 @@ if [[ -f /mnt/boot/grub/splash.png ]]; then
     echo 'GRUB_BACKGROUND="/boot/grub/splash.png"' >> /mnt/etc/default/grub
 fi
 
-if [[ "$IS_UEFI" == true ]]; then
+if [[ "$BOOT_MODE" == "uefi" ]]; then
     arch-chroot /mnt grub-install \
         --target=x86_64-efi \
         --efi-directory=/boot \
@@ -449,9 +448,11 @@ else
     arch-chroot /mnt grub-install --target=i386-pc "$DISK"
 fi
 
-arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+echo "=== Step 11: Prepare AUR build environment ==="
 
-echo "=== Step 13: Install Paru, Caelestia Shell, CLI, and full Dots ==="
+# Do not create debug packages; it reduces build disk/RAM use.
+sed -i -E '/^OPTIONS=/ s/(^| )debug( |$)/\1!debug\2/' \
+    /mnt/etc/makepkg.conf
 
 cat > /mnt/root/setup-caelestia.sh <<'AUR_SCRIPT'
 #!/usr/bin/env bash
@@ -465,7 +466,7 @@ export XDG_CACHE_HOME="$home/.cache"
 export XDG_CONFIG_HOME="$home/.config"
 export XDG_DATA_HOME="$home/.local/share"
 
-# Limit compile parallelism: prevents an OOM cascade in small VMs.
+# One compile job only: safe on weak machines/VMs.
 export MAKEFLAGS="-j1"
 export CMAKE_BUILD_PARALLEL_LEVEL=1
 export NINJAFLAGS="-j1"
@@ -476,7 +477,6 @@ install -d -o "$user" -g "$user" -m 0755 \
     "$home/.local" \
     "$home/.local/share"
 
-# Add Chaotic-AUR only for the prebuilt Paru package.
 pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com
 pacman-key --lsign-key 3056513887B78AEB
 
@@ -493,7 +493,7 @@ PACMANCONF
 pacman -Syy --noconfirm
 pacman -S --needed --noconfirm paru
 
-# First install the official stable CLI.
+# Full Caelestia package set. No "|| true": a failure must stop the installer.
 runuser -u "$user" -- env \
     HOME="$home" \
     XDG_CACHE_HOME="$home/.cache" \
@@ -508,8 +508,7 @@ runuser -u "$user" -- env \
         app2unit-git \
         ttf-rubik-vf
 
-# The upstream full-dots installer is intentionally retained.
-# The low job limit and the already-active 8GiB target swap reduce OOM risk.
+# Full official Caelestia dots installer.
 runuser -u "$user" -- env \
     HOME="$home" \
     XDG_CACHE_HOME="$home/.cache" \
@@ -520,25 +519,34 @@ runuser -u "$user" -- env \
     NINJAFLAGS="-j1" \
     caelestia install --noconfirm
 
-# Restore GayOS branding after Caelestia installs its own user configuration.
-install -d -o "$user" -g "$user" -m 0755 "$home/.config/fastfetch"
+chown -R "$user:$user" "$home"
+AUR_SCRIPT
+
+chmod 755 /mnt/root/setup-caelestia.sh
+
+# No || true. Failure is kept in /mnt/var/log/gayos-install.log.
+arch-chroot /mnt /root/setup-caelestia.sh "$USERNAME"
+
+rm -f /mnt/root/setup-caelestia.sh
+
+echo "=== Step 12: Restore GayOS branding after Caelestia ==="
+
+install -d -o "$USERNAME" -g "$USERNAME" -m 0755 \
+    "/mnt/home/$USERNAME/.config/fastfetch"
 
 if [[ -f /etc/fastfetch/config.jsonc ]]; then
-    install -o "$user" -g "$user" -m 0644 \
+    install -o "$USERNAME" -g "$USERNAME" -m 0644 \
         /etc/fastfetch/config.jsonc \
-        "$home/.config/fastfetch/config.jsonc"
+        "/mnt/home/$USERNAME/.config/fastfetch/config.jsonc"
 fi
 
 if [[ -f /etc/fastfetch/logo.txt ]]; then
-    install -o "$user" -g "$user" -m 0644 \
+    install -o "$USERNAME" -g "$USERNAME" -m 0644 \
         /etc/fastfetch/logo.txt \
-        "$home/.config/fastfetch/logo.txt"
+        "/mnt/home/$USERNAME/.config/fastfetch/logo.txt"
 fi
 
-# Restore readable Kitty font after Caelestia setup.
-install -d -o "$user" -g "$user" -m 0755 "$home/.config/kitty"
-
-cat > "$home/.config/kitty/kitty.conf" <<'KITTY'
+cat > "/mnt/home/$USERNAME/.config/kitty/kitty.conf" <<'KITTY'
 font_family CaskaydiaCove Nerd Font Mono
 bold_font auto
 italic_font auto
@@ -550,30 +558,19 @@ window_padding_width 8
 background_opacity 0.95
 KITTY
 
-# Ensure Fastfetch is always available in the user shell.
-cat > "$home/.zshrc" <<'ZSHRC'
+cat > "/mnt/home/$USERNAME/.zshrc" <<'ZSHRC'
 export PATH="$HOME/.local/bin:$PATH"
 fastfetch
 ZSHRC
 
-chown -R "$user:$user" "$home"
-AUR_SCRIPT
-
-chmod 755 /mnt/root/setup-caelestia.sh
-
-# No `|| true` here. If Caelestia fails, the installer stops and log is preserved.
-arch-chroot /mnt /root/setup-caelestia.sh "$USERNAME"
-
-rm -f /mnt/root/setup-caelestia.sh
-
-echo "=== Step 14: Configure Caelestia autostart ==="
+echo "=== Step 13: Autostart Caelestia ==="
 
 install -d -o "$USERNAME" -g "$USERNAME" -m 0755 \
     "/mnt/home/$USERNAME/.config/systemd/user"
 
 cat > "/mnt/home/$USERNAME/.config/systemd/user/caelestia-shell.service" <<'UNIT'
 [Unit]
-Description=Caelestia Shell
+Description=Caelestia Shell launcher
 After=graphical-session.target
 PartOf=graphical-session.target
 
@@ -589,12 +586,10 @@ UNIT
 arch-chroot /mnt runuser -u "$USERNAME" -- \
     systemctl --user enable caelestia-shell.service
 
-echo "=== Step 15: Configure Snapper ==="
+echo "=== Step 14: Configure Snapper ==="
 
-# Snapper needs --no-dbus inside a chroot.
 arch-chroot /mnt snapper --no-dbus -c root create-config /
 
-# create-config makes its own .snapshots subvolume. Replace it with @snapshots.
 umount /mnt/.snapshots 2>/dev/null || true
 btrfs subvolume delete /mnt/.snapshots 2>/dev/null || true
 mkdir -p /mnt/.snapshots
@@ -604,12 +599,16 @@ chmod 750 /mnt/.snapshots
 arch-chroot /mnt systemctl enable snapper-timeline.timer
 arch-chroot /mnt systemctl enable snapper-cleanup.timer
 
-arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME"
+arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+
+chown -R "$USERNAME:$USERNAME" "/mnt/home/$USERNAME"
 
 echo "=== Installation complete ==="
-echo "Log preserved at: /mnt/var/log/gayos-install.log"
+echo "Installer log: $LOG"
+echo "Remote repair user: gayos"
+echo "Remote repair password: gayos"
 
 run_zenity --info \
     --title="GayOS Installer" \
-    --text="GayOS is installed.\n\nCaelestia Dots were installed.\nSSH is enabled for remote repair.\n\nReboot, remove the ISO, then log in." \
-    --width=560 || true
+    --text="GayOS is installed.\n\nFull Caelestia Dots, GayOS Fastfetch branding, GRUB background, Btrfs Snapper, and SSH are configured.\n\nRemote repair account:\nUser: gayos\nPassword: gayos\n\nChange this password after first login.\n\nReboot and remove the ISO." \
+    --width=650 || true
