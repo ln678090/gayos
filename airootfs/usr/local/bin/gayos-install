@@ -24,7 +24,7 @@ run_zenity() {
         zenity "$@"
 }
 
-# 1. Welcome dialog
+# 1. Welcome
 if ! run_zenity --question \
     --title="GayOS Installer" \
     --text="Welcome to GayOS Installer!\n\nThis will install GayOS (Btrfs + Caelestia Desktop) to your disk.\n\n⚠️ WARNING: All data on the selected disk will be erased.\n\nContinue only if you understand this." \
@@ -142,11 +142,11 @@ mount -o subvol=@var_log,compress=zstd "$ROOT_PART" /mnt/var/log
 mount -o subvol=@var_cache,compress=zstd "$ROOT_PART" /mnt/var/cache
 mount -o subvol=@swap "$ROOT_PART" /mnt/swap
 
-# Tạo swapfile 2GB chống OOM RAM khi build/chạy hệ thống
+# Tạo swapfile 2GB
 btrfs filesystem mkswapfile --size 2g /mnt/swap/swapfile || true
 swapon /mnt/swap/swapfile || true
 
-echo "=== Step 4: Setup Pacman & Chaotic-AUR ==="
+echo "=== Step 4: Setup Pacman Live Environment ==="
 sed -i 's/^CheckSpace/#CheckSpace/' /etc/pacman.conf || true
 sed -i 's/^#ParallelDownloads = 5/ParallelDownloads = 5/' /etc/pacman.conf || true
 
@@ -247,6 +247,9 @@ if [[ -d /home/gay/.config ]]; then
     cp -a /home/gay/.config/. "/mnt/home/$USERNAME/.config/" || true
 fi
 
+# Đảm bảo phân quyền toàn bộ thư mục home cho user
+arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME"
+
 echo "=== Step 10: Setup Chaotic-AUR, Paru & Caelestia ==="
 cat > /mnt/root/setup-desktop.sh <<'AUR_SCRIPT'
 #!/usr/bin/env bash
@@ -256,7 +259,7 @@ home="/home/$user"
 
 export HOME="$home"
 
-# 1. Cài đặt kho Chaotic-AUR trực tiếp (để có sẵn paru binary chuẩn 100% không lo OOM)
+# 1. Cài đặt kho Chaotic-AUR
 pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com || true
 pacman-key --lsign-key 3056513887B78AEB || true
 pacman -U --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst' 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst' || true
@@ -271,10 +274,13 @@ fi
 
 pacman -Sy --noconfirm
 
-# 2. Cài đặt Paru & các components trực tiếp từ kho (siêu nhanh)
-pacman -S --needed --noconfirm paru app2unit quickshell-git caelestia-cli-git || true
+# 2. Cài đặt Paru và Quickshell từ kho chính/Chaotic-AUR
+pacman -S --needed --noconfirm paru quickshell || true
 
-# 3. Clone và setup full Caelestia dotfiles
+# 3. Dùng Paru để cài đặt các package AUR đặc thù của Caelestia
+runuser -u "$user" -- paru -S --noconfirm --needed caelestia-cli-git app2unit || true
+
+# 4. Clone và setup full Caelestia dotfiles
 rm -rf "$home/.local/share/caelestia"
 runuser -u "$user" -- git clone https://github.com/caelestia-dots/caelestia.git "$home/.local/share/caelestia"
 
@@ -282,8 +288,9 @@ if [[ -f "$home/.local/share/caelestia/install.fish" ]]; then
     runuser -u "$user" -- fish "$home/.local/share/caelestia/install.fish" --noconfirm || true
 fi
 
-# 4. Clone shell widget nếu chưa có
+# 5. Clone shell widget nếu chưa có
 mkdir -p "$home/.config/quickshell"
+chown -R "$user:$user" "$home/.config"
 if [[ ! -d "$home/.config/quickshell/caelestia" ]]; then
     runuser -u "$user" -- git clone https://github.com/caelestia-dots/shell.git "$home/.config/quickshell/caelestia"
 fi
@@ -326,4 +333,4 @@ umount /var/cache/pacman/pkg 2>/dev/null || true
 echo "=== Installation Finished ==="
 run_zenity --info \
     --title="GayOS Installer" \
-    --text="GayOS with Paru &amp; Caelestia Desktop has been installed successfully!\n\nPlease reboot your system now."
+    --text="GayOS with Paru and Caelestia Desktop has been installed successfully!\n\nPlease reboot your system now."
