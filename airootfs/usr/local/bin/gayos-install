@@ -24,17 +24,17 @@ run_zenity() {
         zenity "$@"
 }
 
-# 1. Welcome dialog
+# 1. Welcome
 if ! run_zenity --question \
     --title="GayOS Installer" \
-    --text="Welcome to GayOS Installer!\n\nThis will install GayOS (Btrfs) to your disk.\n\n⚠️ WARNING: All data on the selected disk will be erased.\n\nContinue only if you understand this." \
+    --text="Welcome to GayOS Installer!\n\nThis will install GayOS (Btrfs + Full Caelestia Desktop via Paru).\n\n⚠️ WARNING: All data on the selected disk will be erased.\n\nContinue only if you understand this." \
     --ok-label="I AM GAY" \
     --cancel-label="Cancel" \
     --width=520; then
     exit 0
 fi
 
-# 2. Select disk
+# 2. Select Disk
 DISK=$(run_zenity --list --radiolist \
     --title="Select Disk" \
     --text="Choose the disk to install GayOS.\nAll data on this disk will be erased." \
@@ -83,13 +83,12 @@ umount -R /mnt 2>/dev/null || true
 dd if=/dev/zero of="$DISK" bs=1M count=100 conv=notrunc || true
 wipefs -a "$DISK" || true
 
-# Check Boot Mode
 IS_UEFI=false
 if [[ -d /sys/firmware/efi ]]; then
     IS_UEFI=true
-    echo "Boot mode detected: UEFI"
+    echo "Boot mode: UEFI"
 else
-    echo "Boot mode detected: BIOS (Legacy)"
+    echo "Boot mode: BIOS (Legacy)"
 fi
 
 echo "=== Step 2: Partitioning ==="
@@ -141,24 +140,28 @@ mount -o subvol=@snapshots,compress=zstd "$ROOT_PART" /mnt/.snapshots
 mount -o subvol=@var_log,compress=zstd "$ROOT_PART" /mnt/var/log
 mount -o subvol=@var_cache,compress=zstd "$ROOT_PART" /mnt/var/cache
 
-echo "=== Step 4: Fix Pacman Cache and CheckSpace on Live System ==="
+echo "=== Step 4: Fix Pacman Live Environment ==="
 sed -i 's/^CheckSpace/#CheckSpace/' /etc/pacman.conf || true
 sed -i 's/^#ParallelDownloads = 5/ParallelDownloads = 5/' /etc/pacman.conf || true
 
-# Tạo thư mục và trỏ cache tải về vào chính ổ đĩa đích /mnt để không bị tràn RAM Live ISO
 mkdir -p /mnt/var/cache/pacman/pkg
 mount --bind /mnt/var/cache/pacman/pkg /var/cache/pacman/pkg
 
 echo "=== Step 5: pacstrap packages ==="
 pacstrap -c -K /mnt \
     base linux linux-firmware \
-    base-devel networkmanager sudo zsh git \
+    base-devel rust cargo networkmanager sudo zsh fish git \
     grub efibootmgr \
     btrfs-progs snapper \
-    hyprland kitty \
+    hyprland xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
+    kitty \
     pipewire pipewire-pulse wireplumber \
-    brightnessctl ddcutil cava \
-    vim neovim
+    brightnessctl ddcutil cava aubio \
+    app2unit libqalculate lm_sensors swappy \
+    ttf-jetbrains-mono-nerd ttf-cascadia-code-nerd noto-fonts-cjk noto-fonts-emoji \
+    grim slurp cliphist fuzzel wl-clipboard \
+    greetd greetd-tuigreet \
+    vim neovim fastfetch
 
 echo "=== Step 6: Generating fstab ==="
 genfstab -U /mnt > /mnt/etc/fstab
@@ -202,15 +205,19 @@ chmod 0440 /mnt/etc/sudoers.d/99-wheel
 arch-chroot /mnt useradd -m -G wheel,audio,video,input,network -s /bin/zsh "$USERNAME"
 echo "$USERNAME:$USER_PASSWORD" | arch-chroot /mnt chpasswd
 
-# Copy desktop/skel configuration
-if [[ -d /etc/skel/.config ]]; then
-    mkdir -p "/mnt/home/$USERNAME/.config"
-    cp -a /etc/skel/.config/. "/mnt/home/$USERNAME/.config/"
-    arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME/.config"
-fi
+# Auto login qua greetd vào Hyprland
+mkdir -p /mnt/etc/greetd
+cat > /mnt/etc/greetd/config.toml <<EOF
+[terminal]
+vt = 1
 
-echo "=== Step 10: Building paru & Caelestia Shell ==="
-cat > /mnt/root/build-aur.sh <<'AUR_SCRIPT'
+[default_session]
+command = "tuigreet --time --remember --remember-session --cmd Hyprland"
+user = "$USERNAME"
+EOF
+
+echo "=== Step 10: Building paru (Source) & Installing Caelestia ==="
+cat > /mnt/root/build-caelestia.sh <<'AUR_SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
 user="$1"
@@ -219,21 +226,47 @@ home="/home/$user"
 export HOME="$home"
 cd "$home"
 
-# Install paru-bin
-rm -rf "$home/paru-bin"
-runuser -u "$user" -- git clone --depth=1 https://aur.archlinux.org/paru-bin.git "$home/paru-bin"
-cd "$home/paru-bin"
+# 1. Build Paru từ source (paru-git) - hoàn toàn tương thích với hệ thống
+rm -rf "$home/paru-git"
+runuser -u "$user" -- git clone --depth=1 https://aur.archlinux.org/paru-git.git "$home/paru-git"
+cd "$home/paru-git"
 runuser -u "$user" -- makepkg -si --noconfirm --needed
 cd "$home"
-rm -rf "$home/paru-bin"
+rm -rf "$home/paru-git"
 
-# Install caelestia-shell qua paru
-runuser -u "$user" -- paru -S --noconfirm --needed caelestia-shell || true
+# 2. Dùng chính paru để cài đặt các package Caelestia từ AUR
+runuser -u "$user" -- paru -S --noconfirm --needed quickshell-git caelestia-cli-git || true
+
+# 3. Clone & cài đặt dotfiles Caelestia chính thức
+rm -rf "$home/.local/share/caelestia"
+runuser -u "$user" -- git clone https://github.com/caelestia-dots/caelestia.git "$home/.local/share/caelestia"
+
+if [[ -f "$home/.local/share/caelestia/install.fish" ]]; then
+    runuser -u "$user" -- fish "$home/.local/share/caelestia/install.fish" --noconfirm || true
+fi
+
+# 4. Clone shell widget nếu chưa có
+mkdir -p "$home/.config/quickshell"
+if [[ ! -d "$home/.config/quickshell/caelestia" ]]; then
+    runuser -u "$user" -- git clone https://github.com/caelestia-dots/shell.git "$home/.config/quickshell/caelestia"
+fi
+
+# Build beat_detector
+mkdir -p /usr/lib/caelestia
+if [[ -f "$home/.config/quickshell/caelestia/assets/beat_detector.cpp" ]]; then
+    g++ -std=c++17 -Wall -Wextra \
+        -I/usr/include/pipewire-0.3 -I/usr/include/spa-0.2 -I/usr/include/aubio \
+        -o /usr/lib/caelestia/beat_detector \
+        "$home/.config/quickshell/caelestia/assets/beat_detector.cpp" \
+        -lpipewire-0.3 -laubio || true
+fi
+
+chown -R "$user:$user" "$home"
 AUR_SCRIPT
 
-chmod 755 /mnt/root/build-aur.sh
-arch-chroot /mnt /root/build-aur.sh "$USERNAME" || true
-rm -f /mnt/root/build-aur.sh
+chmod 755 /mnt/root/build-caelestia.sh
+arch-chroot /mnt /root/build-caelestia.sh "$USERNAME" || true
+rm -f /mnt/root/build-caelestia.sh
 
 echo "=== Step 11: Configuring Snapper ==="
 umount /mnt/.snapshots 2>/dev/null || true
@@ -246,14 +279,14 @@ chmod 750 /mnt/.snapshots
 
 echo "=== Step 12: Enabling Services ==="
 arch-chroot /mnt systemctl enable NetworkManager.service
+arch-chroot /mnt systemctl enable greetd.service
 arch-chroot /mnt systemctl enable snapper-timeline.timer || true
 arch-chroot /mnt systemctl enable snapper-cleanup.timer || true
 arch-chroot /mnt systemctl set-default graphical.target
 
-# Bỏ bind mount cache khi xong
 umount /var/cache/pacman/pkg 2>/dev/null || true
 
 echo "=== Installation Finished ==="
 run_zenity --info \
     --title="GayOS Installer" \
-    --text="GayOS has been installed successfully!\n\nPlease reboot your system now."
+    --text="GayOS with Paru & Caelestia Desktop has been installed successfully!\n\nPlease reboot your system now."
