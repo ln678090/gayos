@@ -142,7 +142,7 @@ mount -o subvol=@var_log,compress=zstd "$ROOT_PART" /mnt/var/log
 mount -o subvol=@var_cache,compress=zstd "$ROOT_PART" /mnt/var/cache
 mount -o subvol=@swap "$ROOT_PART" /mnt/swap
 
-# Tạo swapfile 2GB chống thiếu RAM khi cài đặt
+# Tạo swapfile 2GB
 btrfs filesystem mkswapfile --size 2g /mnt/swap/swapfile || true
 swapon /mnt/swap/swapfile || true
 
@@ -315,15 +315,11 @@ fi
 
 pacman -Sy --noconfirm
 
-# 2. Cài đặt Paru và Quickshell trực tiếp từ repo
-pacman -S --needed --noconfirm paru quickshell || true
+# 2. Cài đặt Paru từ Chaotic-AUR
+pacman -S --needed --noconfirm paru
 
-# 3. Dùng Paru để cài đặt trọn bộ Caelestia Shell từ AUR
-runuser -u "$user" -- paru -S --needed --noconfirm \
-    caelestia-shell \
-    caelestia-cli-git \
-    app2unit-git \
-    ttf-rubik-vf
+# 3. Cài đặt Caelestia Shell & Font qua Paru (dùng yes để tự động bypass provider & inner conflict)
+runuser -u "$user" -- bash -c 'yes | paru -S --needed --noconfirm aur/caelestia-shell aur/ttf-rubik-vf'
 
 # 4. Tạo config shell tối giản
 mkdir -p "$home/.config/caelestia"
