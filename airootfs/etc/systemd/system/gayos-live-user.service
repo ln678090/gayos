@@ -1,0 +1,13 @@
+[Unit]
+Description=Create GayOS live desktop user
+After=local-fs.target
+Before=greetd.service
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/gayos/initialize-live-user
+RemainAfterExit=yes
+
+[Install]
+WantedBy=graphical.target

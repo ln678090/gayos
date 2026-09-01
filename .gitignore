@@ -1,0 +1,33 @@
+# ArchISO build output
+../work/
+../out/
+work/
+out/
+
+# Large ISO artifacts
+*.iso
+*.iso.sig
+
+# Temporary and image-editing files
+*-bright.png
+*-brighter.png
+*-cyan.png
+*-trim.png
+
+# Local backups
+syslinux.backup/
+efiboot.backup/
+
+# Editor and OS files
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Original and temporary source images
+gayos.jpg
+
+gayos-logo*.png
+
+# Local asset copies already represented in airootfs/assets
+assets/gayos-logo-source.png

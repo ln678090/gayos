@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+
+rm -f "$HOME/.local/state/gayos/caelestia-asked"
+exec gayos-first-run

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+export XDG_CURRENT_DESKTOP=Hyprland
+export XDG_SESSION_TYPE=wayland
+export XDG_SESSION_DESKTOP=Hyprland
+export QT_QPA_PLATFORM=wayland
+export GDK_BACKEND=wayland,x11
+export SDL_VIDEODRIVER=wayland
+export CLUTTER_BACKEND=wayland
+export AQ_NO_KMS_REQUIREMENT=1
+
+exec Hyprland --config "$HOME/.config/hypr/hyprland.lua"

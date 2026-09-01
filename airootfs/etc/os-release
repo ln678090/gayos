@@ -1,0 +1,11 @@
+NAME="GayOS"
+PRETTY_NAME="GayOS"
+ID=gayos
+ID_LIKE=arch
+BUILD_ID=rolling
+ANSI_COLOR="0;36"
+HOME_URL="https://github.com/ln678090/gayos"
+DOCUMENTATION_URL="https://wiki.archlinux.org/"
+SUPPORT_URL="https://github.com/ln678090/gayos/issues"
+BUG_REPORT_URL="https://github.com/ln678090/gayos/issues"
+LOGO=gayos

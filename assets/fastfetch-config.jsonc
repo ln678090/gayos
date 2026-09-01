@@ -1,0 +1,32 @@
+{
+  "logo": {
+    "type": "file",
+    "source": "/usr/share/gayos/logo.txt",
+    "position": "top",
+    "color": {
+      "1": "cyan"
+    },
+    "padding": {
+      "top": 1,
+      "bottom": 1
+    }
+  },
+  "display": {
+    "separator": "  "
+  },
+  "modules": [
+    "title",
+    "separator",
+    "os",
+    "host",
+    "kernel",
+    "uptime",
+    "packages",
+    "shell",
+    "terminal",
+    "cpu",
+    "memory",
+    "disk",
+    "colors"
+  ]
+}

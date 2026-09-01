@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+marker="$HOME/.local/state/gayos/caelestia-asked"
+
+if [[ -e "$marker" ]]; then
+    exit 0
+fi
+
+mkdir -p "$(dirname "$marker")"
+
+kitty --title "GayOS Setup" sh -lc '
+clear
+
+printf "\n"
+printf "========================================\n"
+printf "         GayOS First-run Setup\n"
+printf "========================================\n\n"
+printf "Install Caelestia Shell now?\n"
+printf "This will download AUR packages. Internet is required.\n\n"
+printf "[y] Yes, install Caelestia\n"
+printf "[n] No, keep base Hyprland\n\n"
+
+printf "Your choice [y/N]: "
+read -r answer
+
+case "$answer" in
+    y|Y|yes|YES)
+        mkdir -p "$HOME/.local/state/gayos"
+        touch "$HOME/.local/state/gayos/caelestia-asked"
+
+        printf "\nChecking network...\n"
+
+        if ! ping -c 1 -W 3 archlinux.org >/dev/null 2>&1; then
+            printf "No internet connection.\n"
+            printf "Connect to Wi-Fi/network, then run:\n"
+            printf "  gayos-install-caelestia\n"
+            printf "\nPress Enter to close..."
+            read -r
+            exit 1
+        fi
+
+        printf "Installing official build dependencies...\n"
+
+        sudo pacman -Syu --needed --noconfirm \
+            base-devel \
+            git \
+            rust \
+            cmake \
+            ninja \
+            qt6-base \
+            qt6-declarative \
+            qt6-svg
+
+        if ! command -v paru >/dev/null 2>&1; then
+            printf "Downloading and building Paru...\n"
+
+            workdir="$(mktemp -d)"
+            git clone https://aur.archlinux.org/paru.git "$workdir/paru"
+            cd "$workdir/paru"
+
+            makepkg -si --noconfirm --needed
+        fi
+
+        printf "Installing Caelestia CLI...\n"
+        paru -S --needed --noconfirm caelestia-cli
+
+        printf "Installing Caelestia Shell and configuration...\n"
+        caelestia install --noconfirm
+
+        printf "\nCaelestia installation finished.\n"
+        printf "Log out, then log in again to load the Caelestia shell.\n"
+        ;;
+    *)
+        mkdir -p "$HOME/.local/state/gayos"
+        touch "$HOME/.local/state/gayos/caelestia-asked"
+
+        printf "\nCaelestia skipped.\n"
+        printf "Install it later with:\n"
+        printf "  gayos-install-caelestia\n"
+        ;;
+esac
+
+printf "\nPress Enter to close..."
+read -r
+'

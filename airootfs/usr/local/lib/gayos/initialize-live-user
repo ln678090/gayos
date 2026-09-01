@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+user="gay"
+marker="/var/lib/gayos/live-user-ready"
+
+if [[ -e "$marker" ]]; then
+    exit 0
+fi
+
+install -d -m 0755 /var/lib/gayos
+
+if ! id "$user" >/dev/null 2>&1; then
+    useradd \
+        --create-home \
+        --groups wheel,audio,video,input \
+        --shell /bin/zsh \
+        "$user"
+fi
+
+install -d -o "$user" -g "$user" -m 0755 "/home/$user/.config"
+
+if [[ -d /etc/skel/.config ]]; then
+    cp -a /etc/skel/.config/. "/home/$user/.config/"
+fi
+
+if [[ -f /etc/skel/.zprofile ]]; then
+    install -o "$user" -g "$user" -m 0644 \
+        /etc/skel/.zprofile "/home/$user/.zprofile"
+fi
+
+chown -R "$user:$user" "/home/$user/.config"
+
+install -d -m 0755 /etc/sudoers.d
+
+cat > /etc/sudoers.d/99-gay-live <<'SUDOERS'
+gay ALL=(ALL) NOPASSWD: ALL
+SUDOERS
+
+chmod 0440 /etc/sudoers.d/99-gay-live
+
+touch "$marker"

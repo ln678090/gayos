@@ -1,0 +1,140 @@
+local hl = hyprland
+
+hl.set_config({
+	monitor = {
+		{
+			name = "",
+			width = 0,
+			height = 0,
+			refresh_rate = 0,
+			x = 0,
+			y = 0,
+			scale = 1,
+		},
+	},
+
+	env = {
+		"XDG_CURRENT_DESKTOP,Hyprland",
+		"XDG_SESSION_TYPE,wayland",
+		"XDG_SESSION_DESKTOP,Hyprland",
+		"QT_QPA_PLATFORM,wayland",
+		"GDK_BACKEND,wayland,x11",
+		"SDL_VIDEODRIVER,wayland",
+		"CLUTTER_BACKEND,wayland",
+	},
+
+	general = {
+		gaps_in = 5,
+		gaps_out = 12,
+		border_size = 2,
+		layout = "dwindle",
+		col_active_border = "rgba(63dfffcc) rgba(7857ffcc) 45deg",
+		col_inactive_border = "rgba(595959aa)",
+	},
+
+	decoration = {
+		rounding = 10,
+		active_opacity = 1.0,
+		inactive_opacity = 0.95,
+
+		blur = {
+			enabled = true,
+			size = 5,
+			passes = 2,
+		},
+	},
+
+	animations = {
+		enabled = true,
+	},
+
+	dwindle = {
+		pseudotile = true,
+		preserve_split = true,
+	},
+
+	input = {
+		kb_layout = "us",
+		follow_mouse = 1,
+	},
+
+	misc = {
+		disable_hyprland_logo = true,
+		force_default_wallpaper = 0,
+	},
+})
+
+hl.bind("SUPER", "Return", function()
+	hl.exec_cmd("kitty")
+end)
+
+hl.bind("SUPER", "D", function()
+	hl.exec_cmd("fuzzel")
+end)
+
+hl.bind("SUPER", "Q", function()
+	hl.dispatch("killactive")
+end)
+
+hl.bind("SUPER", "M", function()
+	hl.dispatch("exit")
+end)
+
+hl.bind("SUPER", "F", function()
+	hl.dispatch("fullscreen")
+end)
+
+hl.bind("SUPER", "V", function()
+	hl.dispatch("togglefloating")
+end)
+
+hl.bind("SUPER", "L", function()
+	hl.exec_cmd("hyprlock")
+end)
+
+hl.bind("SUPER", "Escape", function()
+	hl.exec_cmd("loginctl lock-session")
+end)
+
+hl.bind("SUPER", "left", function()
+	hl.dispatch("movefocus", "l")
+end)
+
+hl.bind("SUPER", "right", function()
+	hl.dispatch("movefocus", "r")
+end)
+
+hl.bind("SUPER", "up", function()
+	hl.dispatch("movefocus", "u")
+end)
+
+hl.bind("SUPER", "down", function()
+	hl.dispatch("movefocus", "d")
+end)
+
+for i = 1, 5 do
+	hl.bind("SUPER", tostring(i), function()
+		hl.dispatch("workspace", tostring(i))
+	end)
+
+	hl.bind("SUPER SHIFT", tostring(i), function()
+		hl.dispatch("movetoworkspace", tostring(i))
+	end)
+end
+
+hl.bind_mouse("SUPER", "mouse:272", function()
+	hl.dispatch("movewindow")
+end)
+
+hl.bind_mouse("SUPER", "mouse:273", function()
+	hl.dispatch("resizewindow")
+end)
+
+hl.on("hyprland.start", function()
+	hl.exec_cmd("dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP")
+	hl.exec_cmd("/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1")
+	hl.exec_cmd("nm-applet --indicator")
+	hl.exec_cmd("wl-paste --type text --watch cliphist store")
+	hl.exec_cmd("wl-paste --type image --watch cliphist store")
+	-- hl.exec_cmd("sleep 3 && gayos-first-run")
+end)
