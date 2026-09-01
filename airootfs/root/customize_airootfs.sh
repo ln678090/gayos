@@ -28,3 +28,5 @@ chmod 0440 /etc/sudoers.d/99-gay-live
 systemctl enable NetworkManager.service
 systemctl enable greetd.service
 systemctl set-default graphical.target
+
+exit 0
