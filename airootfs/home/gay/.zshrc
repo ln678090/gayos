@@ -1,4 +1,2 @@
 # GayOS Zsh config
-
-# Auto-run fastfetch on terminal open
-fastfetch
+fastfetch --logo /etc/fastfetch/logo.txt

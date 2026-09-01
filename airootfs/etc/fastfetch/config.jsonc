@@ -1,9 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/fastfetch-cli/fastfetch/dev/doc/json_schema.json",
-  "logo": {
-    "type": "absolute",
-    "source": "/etc/fastfetch/logo.txt"
-  },
+  "logo": "/etc/fastfetch/logo.txt",
   "display": {
     "separator": " | "
   },
