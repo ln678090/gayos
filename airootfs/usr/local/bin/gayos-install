@@ -142,7 +142,7 @@ mount -o subvol=@var_log,compress=zstd "$ROOT_PART" /mnt/var/log
 mount -o subvol=@var_cache,compress=zstd "$ROOT_PART" /mnt/var/cache
 mount -o subvol=@swap "$ROOT_PART" /mnt/swap
 
-# Swapfile 2GB
+# Tạo swapfile 2GB chống thiếu RAM khi cài đặt
 btrfs filesystem mkswapfile --size 2g /mnt/swap/swapfile || true
 swapon /mnt/swap/swapfile || true
 
@@ -153,7 +153,7 @@ sed -i 's/^#ParallelDownloads = 5/ParallelDownloads = 5/' /etc/pacman.conf || tr
 mkdir -p /mnt/var/cache/pacman/pkg
 mount --bind /mnt/var/cache/pacman/pkg /var/cache/pacman/pkg
 
-echo "=== Step 5: pacstrap packages ==="
+echo "=== Step 5: pacstrap base packages ==="
 pacstrap -c -K /mnt \
     base linux linux-firmware \
     base-devel networkmanager sudo zsh fish git \
@@ -193,7 +193,7 @@ ANSI_COLOR="38;2;255;105;180"
 HOME_URL="https://github.com/gayos"
 SUPPORT_URL="https://github.com/gayos"
 BUG_REPORT_URL="https://github.com/gayos"
-LOGO=archlinux
+LOGO=arch
 OSREL
 
 ln -sf /usr/share/zoneinfo/Asia/Ho_Chi_Minh /mnt/etc/localtime
@@ -233,30 +233,65 @@ cat > /mnt/etc/greetd/config.toml <<EOF
 vt = 1
 
 [default_session]
-command = "tuigreet --time --remember --remember-session --cmd Hyprland"
+command = "tuigreet --time --remember --remember-session --cmd start-hyprland"
 user = "$USERNAME"
 EOF
 
-# Copy file .zshrc không để hiện wizard setup zsh
-if [[ -f /home/gay/.zshrc ]]; then
-    cp -a /home/gay/.zshrc "/mnt/home/$USERNAME/.zshrc"
-elif [[ -f /etc/skel/.zshrc ]]; then
-    cp -a /etc/skel/.zshrc "/mnt/home/$USERNAME/.zshrc"
-else
-    cat > "/mnt/home/$USERNAME/.zshrc" <<'ZSHRC'
+# Cấu hình ZSH không bị popup setup lần đầu
+cat > "/mnt/home/$USERNAME/.zshrc" <<'ZSHRC'
 export PATH="$HOME/.local/bin:$PATH"
 fastfetch
 ZSHRC
-fi
 
-if [[ -d /home/gay/.config ]]; then
-    mkdir -p "/mnt/home/$USERNAME/.config"
-    cp -a /home/gay/.config/. "/mnt/home/$USERNAME/.config/" || true
-fi
+# Cấu hình Fastfetch hiển thị Logo Arch/GayOS chuẩn
+mkdir -p "/mnt/home/$USERNAME/.config/fastfetch"
+cat > "/mnt/home/$USERNAME/.config/fastfetch/config.jsonc" <<'FFJSON'
+{
+    "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
+    "logo": {
+        "source": "arch",
+        "padding": {
+            "right": 2
+        }
+    },
+    "modules": [
+        "title",
+        "separator",
+        "os",
+        "host",
+        "kernel",
+        "uptime",
+        "packages",
+        "shell",
+        "wm",
+        "terminal",
+        "cpu",
+        "gpu",
+        "memory",
+        "break",
+        "colors"
+    ]
+}
+FFJSON
+
+# Cấu hình Kitty chuẩn font Nerd Font
+mkdir -p "/mnt/home/$USERNAME/.config/kitty"
+cat > "/mnt/home/$USERNAME/.config/kitty/kitty.conf" <<'KITTY'
+font_family      CaskaydiaCove Nerd Font Mono
+bold_font        auto
+italic_font      auto
+bold_italic_font auto
+font_size        12.5
+
+cursor_shape     beam
+enable_audio_bell no
+window_padding_width 8
+background_opacity 0.95
+KITTY
 
 arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME"
 
-echo "=== Step 10: Setup Chaotic-AUR, Paru & Caelestia Desktop ==="
+echo "=== Step 10: Setup Chaotic-AUR & Installing Caelestia Shell ==="
 cat > /mnt/root/setup-desktop.sh <<'AUR_SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -280,66 +315,66 @@ fi
 
 pacman -Sy --noconfirm
 
-# 2. Cài đặt Paru, Quickshell & font Rubik từ AUR
+# 2. Cài đặt Paru và Quickshell trực tiếp từ repo
 pacman -S --needed --noconfirm paru quickshell || true
-runuser -u "$user" -- paru -S --noconfirm --needed \
+
+# 3. Dùng Paru để cài đặt trọn bộ Caelestia Shell từ AUR
+runuser -u "$user" -- paru -S --needed --noconfirm \
+    caelestia-shell \
     caelestia-cli-git \
-    app2unit \
-    ttf-rubik-vf || true
+    app2unit-git \
+    ttf-rubik-vf
 
-# Tạo thư mục và set toàn quyền cho user trước khi git clone
-mkdir -p "$home/.local/share" "$home/.config/quickshell" "$home/.local/bin"
-chown -R "$user:$user" "$home"
+# 4. Tạo config shell tối giản
+mkdir -p "$home/.config/caelestia"
+printf '{}\n' > "$home/.config/caelestia/shell.json"
 
-# 3. Clone và setup full Caelestia dotfiles
-rm -rf "$home/.local/share/caelestia"
-runuser -u "$user" -- git clone https://github.com/caelestia-dots/caelestia.git "$home/.local/share/caelestia"
-
-# 4. Clone shell widget vào quickshell
-if [[ ! -d "$home/.config/quickshell/caelestia" ]]; then
-    runuser -u "$user" -- git clone https://github.com/caelestia-dots/shell.git "$home/.config/quickshell/caelestia"
-fi
-
-# 5. SYMLINK Cấu hình Caelestia sang ~/.config của USER
-if [[ -d "$home/.local/share/caelestia/hypr" ]]; then
-    rm -rf "$home/.config/hypr"
-    ln -sf "$home/.local/share/caelestia/hypr" "$home/.config/hypr"
-fi
-if [[ -d "$home/.local/share/caelestia/fastfetch" ]]; then
-    rm -rf "$home/.config/fastfetch"
-    ln -sf "$home/.local/share/caelestia/fastfetch" "$home/.config/fastfetch"
-fi
-
-# Đảm bảo Hyprland tự khởi động Quickshell Caelestia
-if [[ -f "$home/.config/hypr/hyprland.conf" ]]; then
-    if ! grep -q "caelestia" "$home/.config/hypr/hyprland.conf"; then
-        echo "exec-once = qs -c caelestia" >> "$home/.config/hypr/hyprland.conf"
-    fi
-fi
-
-# Build beat_detector
-mkdir -p /usr/lib/caelestia
-if [[ -f "$home/.config/quickshell/caelestia/assets/beat_detector.cpp" ]]; then
-    g++ -std=c++17 -Wall -Wextra \
-        -I/usr/include/pipewire-0.3 -I/usr/include/spa-0.2 -I/usr/include/aubio \
-        -o /usr/lib/caelestia/beat_detector \
-        "$home/.config/quickshell/caelestia/assets/beat_detector.cpp" \
-        -lpipewire-0.3 -laubio || true
-fi
-
-# Cài đặt phông chữ nội bộ
-if [[ -d "$home/.config/quickshell/caelestia/assets/fonts" ]]; then
-    mkdir -p "$home/.local/share/fonts"
-    cp -r "$home/.config/quickshell/caelestia/assets/fonts/." "$home/.local/share/fonts/" || true
-    fc-cache -fv || true
-fi
-
-chown -R "$user:$user" "$home"
+chown -R "$user:$user" "$home/.config" "$home/.cache" "$home/.local" 2>/dev/null || true
 AUR_SCRIPT
 
 chmod 755 /mnt/root/setup-desktop.sh
-arch-chroot /mnt /root/setup-desktop.sh "$USERNAME" || true
+arch-chroot /mnt /root/setup-desktop.sh "$USERNAME"
 rm -f /mnt/root/setup-desktop.sh
+
+# Cấu hình Autostart Caelestia qua Hyprland
+mkdir -p "/mnt/home/$USERNAME/.config/hypr"
+cat > "/mnt/home/$USERNAME/.config/hypr/hyprland.lua" <<'HYPRLUA'
+-- GayOS Default Hyprland Config
+hl.config({
+    general = {
+        gaps_in = 5,
+        gaps_out = 10,
+        border_size = 2,
+        ["col.active_border"] = "rgba(ff69b4ee) rgba(00d4ffee) 45deg",
+        ["col.inactive_border"] = "rgba(595959aa)",
+    },
+    decoration = {
+        rounding = 8,
+    },
+})
+
+hl.bind("SUPER + Q", function()
+    hl.exec_cmd("kitty")
+end)
+
+hl.bind("SUPER + D", function()
+    hl.exec_cmd("fuzzel")
+end)
+
+hl.bind("SUPER + C", function()
+    hl.dispatch(hl.dsp.window.close())
+end)
+
+hl.bind("SUPER + M", function()
+    hl.dispatch(hl.dsp.exit())
+end)
+
+hl.on("hyprland.start", function()
+    hl.exec_cmd("caelestia shell -d")
+end)
+HYPRLUA
+
+arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME"
 
 echo "=== Step 11: Configuring Snapper ==="
 umount /mnt/.snapshots 2>/dev/null || true
