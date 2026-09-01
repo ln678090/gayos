@@ -1,0 +1,23 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fastfetch-cli/fastfetch/dev/doc/json_schema.json",
+  "logo": {
+    "type": "absolute",
+    "source": "/etc/fastfetch/logo.txt"
+  },
+  "display": {
+    "separator": " | "
+  },
+  "modules": [
+    "title",
+    "os",
+    "kernel",
+    "uptime",
+    "packages",
+    "shell",
+    "wm",
+    "terminal",
+    "cpu",
+    "gpu",
+    "memory"
+  ]
+}
