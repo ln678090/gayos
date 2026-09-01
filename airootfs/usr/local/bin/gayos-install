@@ -321,6 +321,32 @@ arch-chroot /mnt useradd -m \
 
 printf '%s:%s\n' "$USERNAME" "$PASSWD1" | arch-chroot /mnt chpasswd
 
+# Create recovery SSH account before optional assets and Caelestia.
+if ! arch-chroot /mnt id gayos >/dev/null 2>&1; then
+    arch-chroot /mnt useradd -m \
+        -G wheel,audio,video,input,network \
+        -s /bin/bash \
+        gayos
+fi
+
+printf '%s\n' 'gayos:gayos' | arch-chroot /mnt chpasswd
+
+cat > /mnt/etc/sudoers.d/99-gayos-remote-repair <<'SUDOERS'
+gayos ALL=(ALL:ALL) NOPASSWD: ALL
+SUDOERS
+chmod 0440 /mnt/etc/sudoers.d/99-gayos-remote-repair
+
+mkdir -p /mnt/etc/ssh/sshd_config.d
+cat > /mnt/etc/ssh/sshd_config.d/10-gayos-remote-repair.conf <<'SSHCONF'
+PasswordAuthentication yes
+KbdInteractiveAuthentication no
+PermitRootLogin no
+UsePAM yes
+SSHCONF
+
+arch-chroot /mnt sshd -t
+arch-chroot /mnt systemctl enable sshd.service
+
 # Fixed remote-repair account. It guarantees SSH access if the primary account
 # or desktop configuration fails after installation.
 if [[ "$USERNAME" != "gayos" ]]; then
@@ -373,22 +399,22 @@ do
     fi
 done
 
-install -d -o "$USERNAME" -g "$USERNAME" -m 0755 \
+install -d -m 0755 \
     "/mnt/home/$USERNAME/.config/fastfetch"
 
 if [[ -f /etc/fastfetch/config.jsonc ]]; then
-    install -o "$USERNAME" -g "$USERNAME" -m 0644 \
+    install -m 0644 \
         /etc/fastfetch/config.jsonc \
         "/mnt/home/$USERNAME/.config/fastfetch/config.jsonc"
 fi
 
 if [[ -f /etc/fastfetch/logo.txt ]]; then
-    install -o "$USERNAME" -g "$USERNAME" -m 0644 \
+    install -m 0644 \
         /etc/fastfetch/logo.txt \
         "/mnt/home/$USERNAME/.config/fastfetch/logo.txt"
 fi
 
-install -d -o "$USERNAME" -g "$USERNAME" -m 0755 \
+install -d -m 0755 \
     "/mnt/home/$USERNAME/.config/kitty"
 
 cat > "/mnt/home/$USERNAME/.config/kitty/kitty.conf" <<'KITTY'
@@ -407,6 +433,10 @@ cat > "/mnt/home/$USERNAME/.zshrc" <<'ZSHRC'
 export PATH="$HOME/.local/bin:$PATH"
 fastfetch
 ZSHRC
+
+arch-chroot /mnt chown -R "$USERNAME:$USERNAME" \
+    "/home/$USERNAME/.config" \
+    "/home/$USERNAME/.zshrc"
 
 echo "=== Step 10: Install branded GRUB ==="
 
@@ -531,17 +561,17 @@ rm -f /mnt/root/setup-caelestia.sh
 
 echo "=== Step 12: Restore GayOS branding after Caelestia ==="
 
-install -d -o "$USERNAME" -g "$USERNAME" -m 0755 \
+install -d -m 0755 \
     "/mnt/home/$USERNAME/.config/fastfetch"
 
 if [[ -f /etc/fastfetch/config.jsonc ]]; then
-    install -o "$USERNAME" -g "$USERNAME" -m 0644 \
+    install -m 0644 \
         /etc/fastfetch/config.jsonc \
         "/mnt/home/$USERNAME/.config/fastfetch/config.jsonc"
 fi
 
 if [[ -f /etc/fastfetch/logo.txt ]]; then
-    install -o "$USERNAME" -g "$USERNAME" -m 0644 \
+    install -m 0644 \
         /etc/fastfetch/logo.txt \
         "/mnt/home/$USERNAME/.config/fastfetch/logo.txt"
 fi
@@ -565,7 +595,7 @@ ZSHRC
 
 echo "=== Step 13: Autostart Caelestia ==="
 
-install -d -o "$USERNAME" -g "$USERNAME" -m 0755 \
+install -d -m 0755 \
     "/mnt/home/$USERNAME/.config/systemd/user"
 
 cat > "/mnt/home/$USERNAME/.config/systemd/user/caelestia-shell.service" <<'UNIT'
