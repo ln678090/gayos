@@ -128,10 +128,11 @@ btrfs subvolume create /mnt/@home
 btrfs subvolume create /mnt/@snapshots
 btrfs subvolume create /mnt/@var_log
 btrfs subvolume create /mnt/@var_cache
+btrfs subvolume create /mnt/@swap
 umount /mnt
 
 mount -o subvol=@,compress=zstd "$ROOT_PART" /mnt
-mkdir -p /mnt/{boot,home,.snapshots,var/log,var/cache,var/cache/pacman/pkg}
+mkdir -p /mnt/{boot,home,.snapshots,var/log,var/cache,swap,var/cache/pacman/pkg}
 if [[ "$IS_UEFI" = true ]]; then
     mount "$BOOT_PART" /mnt/boot
 fi
@@ -139,8 +140,13 @@ mount -o subvol=@home,compress=zstd "$ROOT_PART" /mnt/home
 mount -o subvol=@snapshots,compress=zstd "$ROOT_PART" /mnt/.snapshots
 mount -o subvol=@var_log,compress=zstd "$ROOT_PART" /mnt/var/log
 mount -o subvol=@var_cache,compress=zstd "$ROOT_PART" /mnt/var/cache
+mount -o subvol=@swap "$ROOT_PART" /mnt/swap
 
-echo "=== Step 4: Fix Pacman Live Environment ==="
+# Tạo swapfile 2GB chống OOM RAM khi build/chạy hệ thống
+btrfs filesystem mkswapfile --size 2g /mnt/swap/swapfile || true
+swapon /mnt/swap/swapfile || true
+
+echo "=== Step 4: Setup Pacman & Chaotic-AUR ==="
 sed -i 's/^CheckSpace/#CheckSpace/' /etc/pacman.conf || true
 sed -i 's/^#ParallelDownloads = 5/ParallelDownloads = 5/' /etc/pacman.conf || true
 
@@ -150,7 +156,7 @@ mount --bind /mnt/var/cache/pacman/pkg /var/cache/pacman/pkg
 echo "=== Step 5: pacstrap packages ==="
 pacstrap -c -K /mnt \
     base linux linux-firmware \
-    base-devel rust networkmanager sudo zsh fish git \
+    base-devel networkmanager sudo zsh fish git \
     grub efibootmgr \
     btrfs-progs snapper \
     hyprland xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
@@ -177,7 +183,6 @@ cat > /mnt/etc/hosts <<EOF
 127.0.0.1   $HOSTNAME
 EOF
 
-# GayOS os-release branding cho fastfetch nhận diện
 cat > /mnt/etc/os-release <<'OSREL'
 NAME="GayOS"
 PRETTY_NAME="GayOS Linux"
@@ -201,7 +206,6 @@ echo "en_US.UTF-8 UTF-8" > /mnt/etc/locale.gen
 arch-chroot /mnt locale-gen
 
 echo "=== Step 8: Installing GRUB with GayOS Name ==="
-# Sửa tên hiển thị menu boot thành GayOS
 sed -i 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="GayOS"/' /mnt/etc/default/grub || true
 
 if [[ "$IS_UEFI" = true ]]; then
@@ -233,7 +237,7 @@ command = "tuigreet --time --remember --remember-session --cmd Hyprland"
 user = "$USERNAME"
 EOF
 
-# Copy cấu hình Live sang user mới (fastfetch, wallpaper, v.v.)
+# Copy cấu hình Live sang user mới
 if [[ -d /etc/skel/.config ]]; then
     mkdir -p "/mnt/home/$USERNAME/.config"
     cp -a /etc/skel/.config/. "/mnt/home/$USERNAME/.config/"
@@ -243,31 +247,34 @@ if [[ -d /home/gay/.config ]]; then
     cp -a /home/gay/.config/. "/mnt/home/$USERNAME/.config/" || true
 fi
 
-echo "=== Step 10: Building paru & Installing Caelestia ==="
-cat > /mnt/root/build-caelestia.sh <<'AUR_SCRIPT'
+echo "=== Step 10: Setup Chaotic-AUR, Paru & Caelestia ==="
+cat > /mnt/root/setup-desktop.sh <<'AUR_SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
 user="$1"
 home="/home/$user"
 
 export HOME="$home"
-cd "$home"
 
-# 1. Build Paru từ source tương thích hoàn toàn
-rm -rf "$home/paru-git"
-runuser -u "$user" -- git clone --depth=1 https://aur.archlinux.org/paru-git.git "$home/paru-git"
-cd "$home/paru-git"
-runuser -u "$user" -- makepkg -si --noconfirm --needed
-cd "$home"
-rm -rf "$home/paru-git"
+# 1. Cài đặt kho Chaotic-AUR trực tiếp (để có sẵn paru binary chuẩn 100% không lo OOM)
+pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com || true
+pacman-key --lsign-key 3056513887B78AEB || true
+pacman -U --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst' 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst' || true
 
-# 2. Cài các package AUR cho Caelestia
-runuser -u "$user" -- paru -S --noconfirm --needed \
-    quickshell-git \
-    caelestia-cli-git \
-    app2unit || true
+if ! grep -q "\[chaotic-aur\]" /etc/pacman.conf; then
+    cat >> /etc/pacman.conf <<'EOF'
 
-# 3. Clone & chạy install dotfiles Caelestia
+[chaotic-aur]
+Include = /etc/pacman.d/chaotic-mirrorlist
+EOF
+fi
+
+pacman -Sy --noconfirm
+
+# 2. Cài đặt Paru & các components trực tiếp từ kho (siêu nhanh)
+pacman -S --needed --noconfirm paru app2unit quickshell-git caelestia-cli-git || true
+
+# 3. Clone và setup full Caelestia dotfiles
 rm -rf "$home/.local/share/caelestia"
 runuser -u "$user" -- git clone https://github.com/caelestia-dots/caelestia.git "$home/.local/share/caelestia"
 
@@ -294,9 +301,9 @@ fi
 chown -R "$user:$user" "$home"
 AUR_SCRIPT
 
-chmod 755 /mnt/root/build-caelestia.sh
-arch-chroot /mnt /root/build-caelestia.sh "$USERNAME" || true
-rm -f /mnt/root/build-caelestia.sh
+chmod 755 /mnt/root/setup-desktop.sh
+arch-chroot /mnt /root/setup-desktop.sh "$USERNAME" || true
+rm -f /mnt/root/setup-desktop.sh
 
 echo "=== Step 11: Configuring Snapper ==="
 umount /mnt/.snapshots 2>/dev/null || true
@@ -319,4 +326,4 @@ umount /var/cache/pacman/pkg 2>/dev/null || true
 echo "=== Installation Finished ==="
 run_zenity --info \
     --title="GayOS Installer" \
-    --text="GayOS with Paru & Caelestia Desktop has been installed successfully!\n\nPlease reboot your system now."
+    --text="GayOS with Paru &amp; Caelestia Desktop has been installed successfully!\n\nPlease reboot your system now."
