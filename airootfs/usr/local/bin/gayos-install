@@ -27,7 +27,7 @@ run_zenity() {
 # 1. Welcome
 if ! run_zenity --question \
     --title="GayOS Installer" \
-    --text="Welcome to GayOS Installer!\n\nThis will install GayOS (Btrfs + Caelestia Desktop) to your disk.\n\n⚠️ WARNING: All data on the selected disk will be erased.\n\nContinue only if you understand this." \
+    --text="Welcome to GayOS Installer!\n\nThis will install complete GayOS (Btrfs + Caelestia + GayOS Custom Theme) to your disk.\n\n⚠️ WARNING: All data on the selected disk will be erased.\n\nContinue only if you understand this." \
     --ok-label="I AM GAY" \
     --cancel-label="Cancel" \
     --width=520; then
@@ -153,7 +153,7 @@ sed -i 's/^#ParallelDownloads = 5/ParallelDownloads = 5/' /etc/pacman.conf || tr
 mkdir -p /mnt/var/cache/pacman/pkg
 mount --bind /mnt/var/cache/pacman/pkg /var/cache/pacman/pkg
 
-echo "=== Step 5: pacstrap base packages ==="
+echo "=== Step 5: pacstrap packages ==="
 pacstrap -c -K /mnt \
     base linux linux-firmware \
     base-devel networkmanager sudo zsh fish git \
@@ -205,8 +205,23 @@ EOF
 echo "en_US.UTF-8 UTF-8" > /mnt/etc/locale.gen
 arch-chroot /mnt locale-gen
 
-echo "=== Step 8: Installing GRUB with GayOS Name ==="
+echo "=== Step 8: Installing GRUB with GayOS Branding & Theme ==="
 sed -i 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="GayOS"/' /mnt/etc/default/grub || true
+
+# Copy toàn bộ wallpaper/background của GayOS từ Live sang hệ thống mới
+if [[ -d /usr/share/backgrounds ]]; then
+    mkdir -p /mnt/usr/share/backgrounds
+    cp -rf /usr/share/backgrounds/. /mnt/usr/share/backgrounds/ || true
+fi
+
+# Cấu hình GRUB Background nếu có ảnh nền
+if [[ -f /mnt/usr/share/backgrounds/gayos.png ]]; then
+    echo 'GRUB_BACKGROUND="/usr/share/backgrounds/gayos.png"' >> /mnt/etc/default/grub
+elif [[ -f /usr/share/backgrounds/default.png ]]; then
+    mkdir -p /mnt/usr/share/backgrounds
+    cp /usr/share/backgrounds/default.png /mnt/usr/share/backgrounds/default.png
+    echo 'GRUB_BACKGROUND="/usr/share/backgrounds/default.png"' >> /mnt/etc/default/grub
+fi
 
 if [[ "$IS_UEFI" = true ]]; then
     arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GayOS --removable
@@ -215,7 +230,7 @@ else
 fi
 arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
-echo "=== Step 9: Sudo & User Setup ==="
+echo "=== Step 9: Sudo, User & GayOS Custom Files Setup ==="
 mkdir -p /mnt/etc/sudoers.d
 cat > /mnt/etc/sudoers.d/99-wheel <<'SUDOERS'
 %wheel ALL=(ALL:ALL) ALL
@@ -237,44 +252,86 @@ command = "tuigreet --time --remember --remember-session --cmd start-hyprland"
 user = "$USERNAME"
 EOF
 
-# Cấu hình ZSH không bị popup setup lần đầu
-cat > "/mnt/home/$USERNAME/.zshrc" <<'ZSHRC'
-export PATH="$HOME/.local/bin:$PATH"
-fastfetch
-ZSHRC
+# Copy toàn bộ script tùy chỉnh của GayOS sang máy mới
+if [[ -d /usr/local/bin ]]; then
+    mkdir -p /mnt/usr/local/bin
+    cp -rf /usr/local/bin/. /mnt/usr/local/bin/ || true
+    chmod +x /mnt/usr/local/bin/* 2>/dev/null || true
+fi
 
-# Cấu hình Fastfetch hiển thị Logo Arch/GayOS chuẩn
+# Copy toàn bộ dotfiles, icons, themes, wallpapers từ Live Home sang User mới
+if [[ -d /etc/skel ]]; then
+    cp -a /etc/skel/. "/mnt/home/$USERNAME/" || true
+fi
+if [[ -d /home/gay/.config ]]; then
+    mkdir -p "/mnt/home/$USERNAME/.config"
+    cp -a /home/gay/.config/. "/mnt/home/$USERNAME/.config/" || true
+fi
+if [[ -f /home/gay/.zshrc ]]; then
+    cp -a /home/gay/.zshrc "/mnt/home/$USERNAME/.zshrc"
+fi
+
+# Cấu hình Fastfetch GayOS với Custom ASCII Logo
 mkdir -p "/mnt/home/$USERNAME/.config/fastfetch"
 cat > "/mnt/home/$USERNAME/.config/fastfetch/config.jsonc" <<'FFJSON'
 {
     "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
     "logo": {
         "source": "arch",
+        "color": {
+            "1": "magenta",
+            "2": "cyan"
+        },
         "padding": {
             "right": 2
         }
     },
+    "display": {
+        "separator": " 󰄾 "
+    },
     "modules": [
         "title",
         "separator",
-        "os",
-        "host",
-        "kernel",
-        "uptime",
-        "packages",
-        "shell",
-        "wm",
-        "terminal",
-        "cpu",
-        "gpu",
-        "memory",
+        {
+            "type": "os",
+            "key": "󰻀 OS",
+            "format": "GayOS Linux ({12})"
+        },
+        {
+            "type": "kernel",
+            "key": " Kernel"
+        },
+        {
+            "type": "uptime",
+            "key": " Uptime"
+        },
+        {
+            "type": "packages",
+            "key": " Packages"
+        },
+        {
+            "type": "shell",
+            "key": " Shell"
+        },
+        {
+            "type": "wm",
+            "key": " WM"
+        },
+        {
+            "type": "terminal",
+            "key": " Terminal"
+        },
+        {
+            "type": "memory",
+            "key": " Memory"
+        },
         "break",
         "colors"
     ]
 }
 FFJSON
 
-# Cấu hình Kitty chuẩn font Nerd Font
+# Cấu hình Kitty chuẩn
 mkdir -p "/mnt/home/$USERNAME/.config/kitty"
 cat > "/mnt/home/$USERNAME/.config/kitty/kitty.conf" <<'KITTY'
 font_family      CaskaydiaCove Nerd Font Mono
@@ -291,7 +348,7 @@ KITTY
 
 arch-chroot /mnt chown -R "$USERNAME:$USERNAME" "/home/$USERNAME"
 
-echo "=== Step 10: Setup Chaotic-AUR & Installing Caelestia Shell ==="
+echo "=== Step 10: Setup Chaotic-AUR, Caelestia Shell & Configs ==="
 cat > /mnt/root/setup-desktop.sh <<'AUR_SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -318,13 +375,13 @@ pacman -Sy --noconfirm
 # 2. Cài đặt Paru từ Chaotic-AUR
 pacman -S --needed --noconfirm paru
 
-# 3. Cài đặt Caelestia Shell & Font qua Paru (dùng yes để tự động bypass provider & inner conflict)
+# 3. Cài đặt Caelestia Shell, CLI & Font qua Paru
 runuser -u "$user" -- bash -c 'yes | paru -S --needed --noconfirm aur/caelestia-shell aur/ttf-rubik-vf'
 
-# 4. Tạo config shell tối giản
-mkdir -p "$home/.config/caelestia"
-printf '{}\n' > "$home/.config/caelestia/shell.json"
+# 4. CHẠY CAELESTIA INSTALL ĐỂ SETUP TRỌN BỘ CẤU HÌNH (DOTS, THEMES, WALLS)
+runuser -u "$user" -- caelestia install --noconfirm || true
 
+# Đảm bảo quyền sở hữu cho user
 chown -R "$user:$user" "$home/.config" "$home/.cache" "$home/.local" 2>/dev/null || true
 AUR_SCRIPT
 
@@ -332,7 +389,7 @@ chmod 755 /mnt/root/setup-desktop.sh
 arch-chroot /mnt /root/setup-desktop.sh "$USERNAME"
 rm -f /mnt/root/setup-desktop.sh
 
-# Cấu hình Autostart Caelestia qua Hyprland
+# Cấu hình Hyprland Autostart Caelestia & Welcome App
 mkdir -p "/mnt/home/$USERNAME/.config/hypr"
 cat > "/mnt/home/$USERNAME/.config/hypr/hyprland.lua" <<'HYPRLUA'
 -- GayOS Default Hyprland Config
@@ -367,6 +424,7 @@ end)
 
 hl.on("hyprland.start", function()
     hl.exec_cmd("caelestia shell -d")
+    hl.exec_cmd("gayos-welcome || true")
 end)
 HYPRLUA
 
@@ -393,4 +451,4 @@ umount /var/cache/pacman/pkg 2>/dev/null || true
 echo "=== Installation Finished ==="
 run_zenity --info \
     --title="GayOS Installer" \
-    --text="GayOS with Paru and Caelestia Desktop has been installed successfully!\n\nPlease reboot your system now."
+    --text="GayOS with Full Caelestia Ecosystem & Custom Theme has been installed successfully!\n\nPlease reboot your system now."
