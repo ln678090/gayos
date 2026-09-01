@@ -164,7 +164,7 @@ pacstrap -c -K /mnt \
     pipewire pipewire-pulse wireplumber \
     brightnessctl ddcutil cava aubio \
     libqalculate lm_sensors swappy \
-    ttf-rubik ttf-jetbrains-mono-nerd ttf-cascadia-code-nerd noto-fonts-cjk noto-fonts-emoji \
+    ttf-material-symbols-variable ttf-jetbrains-mono-nerd ttf-cascadia-code-nerd noto-fonts-cjk noto-fonts-emoji \
     grim slurp cliphist fuzzel wl-clipboard \
     greetd greetd-tuigreet \
     vim neovim fastfetch
@@ -237,7 +237,7 @@ command = "tuigreet --time --remember --remember-session --cmd Hyprland"
 user = "$USERNAME"
 EOF
 
-# Copy file .zshrc và .config từ live sang user mới
+# Copy file .zshrc không để hiện wizard setup zsh
 if [[ -f /home/gay/.zshrc ]]; then
     cp -a /home/gay/.zshrc "/mnt/home/$USERNAME/.zshrc"
 elif [[ -f /etc/skel/.zshrc ]]; then
@@ -280,12 +280,12 @@ fi
 
 pacman -Sy --noconfirm
 
-# 2. Cài đặt Paru, Quickshell & font Material Symbols
+# 2. Cài đặt Paru, Quickshell & font Rubik từ AUR
 pacman -S --needed --noconfirm paru quickshell || true
 runuser -u "$user" -- paru -S --noconfirm --needed \
     caelestia-cli-git \
     app2unit \
-    ttf-material-symbols-variable-git || true
+    ttf-rubik-vf || true
 
 # 3. Clone và setup full Caelestia dotfiles
 rm -rf "$home/.local/share/caelestia"
@@ -297,7 +297,7 @@ if [[ ! -d "$home/.config/quickshell/caelestia" ]]; then
     runuser -u "$user" -- git clone https://github.com/caelestia-dots/shell.git "$home/.config/quickshell/caelestia"
 fi
 
-# 5. SYMLINK Cấu hình Caelestia chuẩn xác sang ~/.config của USER
+# 5. SYMLINK Cấu hình Caelestia sang ~/.config của USER
 mkdir -p "$home/.config"
 if [[ -d "$home/.local/share/caelestia/hypr" ]]; then
     rm -rf "$home/.config/hypr"
@@ -315,7 +315,7 @@ if [[ -f "$home/.config/hypr/hyprland.conf" ]]; then
     fi
 fi
 
-# Build beat_detector cho audio visualizer
+# Build beat_detector
 mkdir -p /usr/lib/caelestia
 if [[ -f "$home/.config/quickshell/caelestia/assets/beat_detector.cpp" ]]; then
     g++ -std=c++17 -Wall -Wextra \
@@ -325,7 +325,7 @@ if [[ -f "$home/.config/quickshell/caelestia/assets/beat_detector.cpp" ]]; then
         -lpipewire-0.3 -laubio || true
 fi
 
-# Cài đặt phông chữ nội bộ nếu có
+# Cài đặt phông chữ nội bộ
 if [[ -d "$home/.config/quickshell/caelestia/assets/fonts" ]]; then
     mkdir -p "$home/.local/share/fonts"
     cp -r "$home/.config/quickshell/caelestia/assets/fonts/." "$home/.local/share/fonts/" || true
