@@ -26,15 +26,6 @@ run_zenity() {
         zenity "$@"
 }
 
-run_kitty() {
-    runuser -u "$REAL_USER" -- env \
-        HOME="$REAL_HOME" \
-        XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
-        DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
-        WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
-        kitty "$@"
-}
-
 # --- Welcome & confirm ---
 if ! run_zenity --question \
     --title="GayOS Installer" \
@@ -65,9 +56,7 @@ HOSTNAME=$(run_zenity --entry \
     --text="Enter hostname for your GayOS system:" \
     --entry-text "gayos")
 
-if [[ -z "$HOSTNAME" ]]; then
-    HOSTNAME="gayos"
-fi
+[[ -z "$HOSTNAME" ]] && HOSTNAME="gayos"
 
 # --- Username ---
 USERNAME=$(run_zenity --entry \
@@ -75,9 +64,7 @@ USERNAME=$(run_zenity --entry \
     --text="Enter your username:" \
     --entry-text "gay")
 
-if [[ -z "$USERNAME" ]]; then
-    USERNAME="gay"
-fi
+[[ -z "$USERNAME" ]] && USERNAME="gay"
 
 # --- Password ---
 PASSWD1=$(run_zenity --entry --hide-text \
@@ -95,7 +82,7 @@ fi
 
 USER_PASSWORD="$PASSWD1"
 
-# --- Start installation ---
+# --- Installation ---
 run_zenity --progress \
     --title="Installing GayOS" \
     --text="Preparing disk..." \
@@ -103,13 +90,12 @@ run_zenity --progress \
     --auto-close \
     --auto-kill \
     --width=400 &
-
 PID_ZENITY=$!
 
 step() {
     local pct=$1
     local msg=$2
-    echo "$pct" > /proc/$PID_ZENITY/fd/1 2>/dev/null || true
+    echo "$pct"
     run_zenity --progress \
         --title="Installing GayOS" \
         --text="$msg" \
@@ -141,13 +127,26 @@ ROOT_PART="${DISK}2"
 # 3. Format
 step 20 "Formatting partitions..."
 mkfs.fat -F32 "$EFI_PART"
-mkfs.ext4 -F "$ROOT_PART"
+mkfs.btrfs -f "$ROOT_PART"
 
-# 4. Mount
-step 30 "Mounting partitions..."
+# 4. Mount & create subvolumes
+step 30 "Creating Btrfs subvolumes..."
+mkdir -p /mnt
 mount "$ROOT_PART" /mnt
-mkdir -p /mnt/boot
+
+# Subvolumes
+btrfs subvolume create /mnt/@
+btrfs subvolume create /mnt/@home
+btrfs subvolume create /mnt/@snapshots
+
+# Unmount and remount with subvolumes
+umount /mnt
+
+mount -o subvol=@,compress=zstd "$ROOT_PART" /mnt
+mkdir -p /mnt/{boot,home,.snapshots}
 mount "$EFI_PART" /mnt/boot
+mount -o subvol=@home,compress=zstd "$ROOT_PART" /mnt/home
+mount -o subvol=@snapshots,compress=zstd "$ROOT_PART" /mnt/.snapshots
 
 # 5. Install base system
 step 40 "Installing base system..."
@@ -155,6 +154,7 @@ pacstrap -C /etc/pacman.conf /mnt \
     base linux linux-firmware \
     networkmanager sudo zsh \
     grub efibootmgr \
+    btrfs-progs snapper \
     paru \
     caelestia-shell \
     vim neovim git \
@@ -188,12 +188,12 @@ EOF
 echo "en_US.UTF-8 UTF-8" > /mnt/etc/locale.gen
 arch-chroot /mnt locale-gen
 
-# 8. Install and configure bootloader
+# 8. GRUB with Btrfs
 step 80 "Installing GRUB..."
 arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GayOS
 arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
-# 9. Configure sudo
+# 9. Sudo
 step 85 "Configuring sudo..."
 mkdir -p /mnt/etc/sudoers.d
 cat > /mnt/etc/sudoers.d/99-gay <<'SUDOERS'
@@ -206,12 +206,30 @@ step 90 "Creating user..."
 arch-chroot /mnt useradd -m -G wheel,audio,video,input,network -s /bin/zsh "$USERNAME"
 echo "$USERNAME:$USER_PASSWORD" | arch-chroot /mnt chpasswd
 
-# 11. Enable services
+# 11. Snapper config (root)
+step 93 "Configuring Snapper..."
+arch-chroot /mnt snapper -c root create-config /
+# Enable timeline & cleanup (optional, có thể tinh chỉnh sau)
+cat > /mnt/etc/snapper/configs/root <<'SNAPPER'
+QGROUP="1/0"
+SUBVOLUME="/@"
+TIMELINE_CREATE="yes"
+TIMELINE_LIMIT_HOURLY="1"
+TIMELINE_LIMIT_DAILY="2"
+TIMELINE_LIMIT_WEEKLY="0"
+TIMELINE_LIMIT_MONTHLY="0"
+NUMBER_LIMIT="2-10"
+NUMBER_LIMIT_IMPORTANT="4-10"
+SNAPPER
+
+# 12. Enable services
 step 95 "Enabling services..."
 arch-chroot /mnt systemctl enable NetworkManager.service
+arch-chroot /mnt systemctl enable snapper-timeline.timer
+arch-chroot /mnt systemctl enable snapper-cleanup.timer
 arch-chroot /mnt systemctl set-default graphical.target
 
-# 12. Done
+# 13. Done
 step 100 "Installation complete!"
 sleep 2
 kill $PID_ZENITY 2>/dev/null || true
@@ -219,6 +237,3 @@ kill $PID_ZENITY 2>/dev/null || true
 run_zenity --info \
     --title="GayOS Installer" \
     --text="GayOS has been installed successfully!\n\nPlease reboot your system now."
-
-# Optionally reboot
-# systemctl reboot
