@@ -16,6 +16,15 @@ if ! id "$user" >/dev/null 2>&1; then
   chown -R "$user:$user" "/home/$user/.config"
   chmod 755 "/home/$user/.cache"
   chmod 755 "/home/$user/.config"
+  mkdir -p /home/gay/.local
+  mkdir -p /home/gay/.cache
+  mkdir -p /home/gay/.config
+  chown -R gay:gay /home/gay/.local
+  chown -R gay:gay /home/gay/.cache
+  chown -R gay:gay /home/gay/.config
+  chmod 755 /home/gay/.local
+  chmod 755 /home/gay/.cache
+  chmod 755 /home/gay/.config
 fi
 
 install -d -o "$user" -g "$user" -m 0755 "/home/$user/.config"
