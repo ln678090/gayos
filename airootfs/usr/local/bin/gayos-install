@@ -1,39 +1,224 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
-# GayOS Installer with Zenity GUI
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-if ! command -v zenity &>/dev/null; then
-    echo "Zenity not found. Installing..."
-    pacman -Sy --noconfirm zenity
+# Re-run as root if needed
+if [[ "${EUID}" -ne 0 ]]; then
+    exec sudo -E /usr/local/bin/gayos-install "$@"
 fi
 
-# Welcome dialog
-zenity --info \
-    --title="GayOS Installer" \
-    --text="Welcome to GayOS Installer!\n\nThis will install GayOS to your disk.\n\n⚠️ WARNING: All data on the target disk will be lost!" \
-    --width=400
+# Helper: run command as the real user (for dialogs)
+REAL_USER="${SUDO_USER:-gay}"
+REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
+REAL_UID="$(id -u "$REAL_USER")"
 
-# Confirm with custom button
-if ! zenity --question \
-    --title="Confirm Installation" \
-    --text="Are you sure you want to continue?\n\nMake sure you have backed up your data." \
+export XDG_RUNTIME_DIR="/run/user/${REAL_UID}"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}"
+
+run_zenity() {
+    runuser -u "$REAL_USER" -- env \
+        HOME="$REAL_HOME" \
+        XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+        DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
+        WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+        zenity "$@"
+}
+
+run_kitty() {
+    runuser -u "$REAL_USER" -- env \
+        HOME="$REAL_HOME" \
+        XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+        DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
+        WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+        kitty "$@"
+}
+
+# --- Welcome & confirm ---
+if ! run_zenity --question \
+    --title="GayOS Installer" \
+    --text="Welcome to GayOS Installer!\n\nThis will install GayOS to your disk.\n\n⚠️ WARNING: All data on the selected disk will be erased.\n\nContinue only if you understand this." \
     --ok-label="I AM GAY" \
     --cancel-label="Cancel" \
-    --width=400; then
-    zenity --info --title="Cancelled" --text="Installation cancelled."
+    --width=520; then
     exit 0
 fi
 
-# Select disk
-DISK=$(lsblk -ndo NAME,SIZE,TYPE 2>/dev/null | grep -w disk | awk '{print $1, $2}' | head -5)
+# --- Disk selection ---
+DISK=$(run_zenity --list --radiolist \
+    --title="Select Disk" \
+    --text="Choose the disk to install GayOS.\nAll data on this disk will be erased." \
+    --column="Select" --column="Disk" \
+    TRUE "$(lsblk -ndo NAME,TYPE | awk '$2=="disk"{print "/dev/"$1}' | head -1)" \
+    FALSE "$(lsblk -ndo NAME,TYPE | awk '$2=="disk"{print "/dev/"$1}' | tail -n +2 | head -1)" \
+    --width=400 --height=200)
 
-if [ -z "$DISK" ]; then
-    zenity --error --title="Error" --text="No disk found!"
+if [[ -z "$DISK" ]]; then
+    run_zenity --error --title="Error" --text="No disk selected. Installation aborted."
     exit 1
 fi
 
-# Run archinstall
-zenity --info --title="Starting" --text="Starting archinstall...\n\nPlease wait."
+# --- Hostname ---
+HOSTNAME=$(run_zenity --entry \
+    --title="Hostname" \
+    --text="Enter hostname for your GayOS system:" \
+    --entry-text "gayos")
 
-sudo archinstall
+if [[ -z "$HOSTNAME" ]]; then
+    HOSTNAME="gayos"
+fi
+
+# --- Username ---
+USERNAME=$(run_zenity --entry \
+    --title="Username" \
+    --text="Enter your username:" \
+    --entry-text "gay")
+
+if [[ -z "$USERNAME" ]]; then
+    USERNAME="gay"
+fi
+
+# --- Password ---
+PASSWD1=$(run_zenity --entry --hide-text \
+    --title="Password" \
+    --text="Enter password for user '$USERNAME':")
+
+PASSWD2=$(run_zenity --entry --hide-text \
+    --title="Confirm Password" \
+    --text="Confirm password for user '$USERNAME':")
+
+if [[ "$PASSWD1" != "$PASSWD2" ]]; then
+    run_zenity --error --title="Error" --text="Passwords do not match. Installation aborted."
+    exit 1
+fi
+
+USER_PASSWORD="$PASSWD1"
+
+# --- Start installation ---
+run_zenity --progress \
+    --title="Installing GayOS" \
+    --text="Preparing disk..." \
+    --percentage=0 \
+    --auto-close \
+    --auto-kill \
+    --width=400 &
+
+PID_ZENITY=$!
+
+step() {
+    local pct=$1
+    local msg=$2
+    echo "$pct" > /proc/$PID_ZENITY/fd/1 2>/dev/null || true
+    run_zenity --progress \
+        --title="Installing GayOS" \
+        --text="$msg" \
+        --percentage="$pct" \
+        --auto-close \
+        --auto-kill \
+        --width=400 &
+    PID_ZENITY=$!
+}
+
+# 1. Wipe disk
+step 5 "Wiping disk $DISK..."
+dd if=/dev/zero of="$DISK" bs=1M count=100 conv=notrunc || true
+wipefs -a "$DISK" || true
+
+# 2. Partition (UEFI + root)
+step 10 "Creating partitions..."
+sgdisk --clear "$DISK" \
+    --new=1:1M:+512M --typecode=1:EF00 --change-name=1:"EFI" \
+    --new=2:0:0 --typecode=2:8300 --change-name=2:"ROOT" \
+    >/dev/null
+
+partprobe "$DISK" || udevadm settle || true
+sleep 2
+
+EFI_PART="${DISK}1"
+ROOT_PART="${DISK}2"
+
+# 3. Format
+step 20 "Formatting partitions..."
+mkfs.fat -F32 "$EFI_PART"
+mkfs.ext4 -F "$ROOT_PART"
+
+# 4. Mount
+step 30 "Mounting partitions..."
+mount "$ROOT_PART" /mnt
+mkdir -p /mnt/boot
+mount "$EFI_PART" /mnt/boot
+
+# 5. Install base system
+step 40 "Installing base system..."
+pacstrap -C /etc/pacman.conf /mnt \
+    base linux linux-firmware \
+    networkmanager sudo zsh \
+    grub efibootmgr \
+    paru \
+    caelestia-shell \
+    vim neovim git \
+    base-devel \
+    || { run_zenity --error --title="Error" --text="pacstrap failed."; exit 1; }
+
+# 6. Generate fstab
+step 60 "Generating fstab..."
+genfstab -U /mnt > /mnt/etc/fstab
+
+# 7. Configure system
+step 70 "Configuring system..."
+
+cat > /mnt/etc/hostname <<EOF
+$HOSTNAME
+EOF
+
+cat > /mnt/etc/hosts <<EOF
+127.0.0.1   localhost
+::1         localhost
+127.0.0.1   $HOSTNAME
+EOF
+
+ln -sf /usr/share/zoneinfo/Asia/Ho_Chi_Minh /mnt/etc/localtime
+hwclock --systohc --utc
+
+# Locale
+cat > /mnt/etc/locale.conf <<EOF
+LANG=en_US.UTF-8
+EOF
+echo "en_US.UTF-8 UTF-8" > /mnt/etc/locale.gen
+arch-chroot /mnt locale-gen
+
+# 8. Install and configure bootloader
+step 80 "Installing GRUB..."
+arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GayOS
+arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+
+# 9. Configure sudo
+step 85 "Configuring sudo..."
+mkdir -p /mnt/etc/sudoers.d
+cat > /mnt/etc/sudoers.d/99-gay <<'SUDOERS'
+%wheel ALL=(ALL) NOPASSWD: ALL
+SUDOERS
+chmod 0440 /mnt/etc/sudoers.d/99-gay
+
+# 10. Create user
+step 90 "Creating user..."
+arch-chroot /mnt useradd -m -G wheel,audio,video,input,network -s /bin/zsh "$USERNAME"
+echo "$USERNAME:$USER_PASSWORD" | arch-chroot /mnt chpasswd
+
+# 11. Enable services
+step 95 "Enabling services..."
+arch-chroot /mnt systemctl enable NetworkManager.service
+arch-chroot /mnt systemctl set-default graphical.target
+
+# 12. Done
+step 100 "Installation complete!"
+sleep 2
+kill $PID_ZENITY 2>/dev/null || true
+
+run_zenity --info \
+    --title="GayOS Installer" \
+    --text="GayOS has been installed successfully!\n\nPlease reboot your system now."
+
+# Optionally reboot
+# systemctl reboot
