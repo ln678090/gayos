@@ -1,0 +1,39 @@
+#!/bin/bash
+set -euo pipefail
+
+# GayOS Installer with Zenity GUI
+
+if ! command -v zenity &>/dev/null; then
+    echo "Zenity not found. Installing..."
+    pacman -Sy --noconfirm zenity
+fi
+
+# Welcome dialog
+zenity --info \
+    --title="GayOS Installer" \
+    --text="Welcome to GayOS Installer!\n\nThis will install GayOS to your disk.\n\n⚠️ WARNING: All data on the target disk will be lost!" \
+    --width=400
+
+# Confirm with custom button
+if ! zenity --question \
+    --title="Confirm Installation" \
+    --text="Are you sure you want to continue?\n\nMake sure you have backed up your data." \
+    --ok-label="I AM GAY" \
+    --cancel-label="Cancel" \
+    --width=400; then
+    zenity --info --title="Cancelled" --text="Installation cancelled."
+    exit 0
+fi
+
+# Select disk
+DISK=$(lsblk -ndo NAME,SIZE,TYPE 2>/dev/null | grep -w disk | awk '{print $1, $2}' | head -5)
+
+if [ -z "$DISK" ]; then
+    zenity --error --title="Error" --text="No disk found!"
+    exit 1
+fi
+
+# Run archinstall
+zenity --info --title="Starting" --text="Starting archinstall...\n\nPlease wait."
+
+sudo archinstall
