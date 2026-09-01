@@ -24,7 +24,7 @@ run_zenity() {
         zenity "$@"
 }
 
-# 1. Welcome
+# 1. Welcome dialog
 if ! run_zenity --question \
     --title="GayOS Installer" \
     --text="Welcome to GayOS Installer!\n\nThis will install GayOS (Btrfs) to your disk.\n\n⚠️ WARNING: All data on the selected disk will be erased.\n\nContinue only if you understand this." \
@@ -83,7 +83,7 @@ umount -R /mnt 2>/dev/null || true
 dd if=/dev/zero of="$DISK" bs=1M count=100 conv=notrunc || true
 wipefs -a "$DISK" || true
 
-# Check Boot Mode (UEFI vs BIOS)
+# Check Boot Mode
 IS_UEFI=false
 if [[ -d /sys/firmware/efi ]]; then
     IS_UEFI=true
@@ -99,7 +99,6 @@ if [[ "$IS_UEFI" = true ]]; then
         --new=2:0:0 --typecode=2:8300 --change-name=2:"ROOT" \
         >/dev/null
 else
-    # MBR/BIOS layout with BIOS boot partition
     sgdisk --clear "$DISK" \
         --new=1:1M:+2M --typecode=1:EF02 --change-name=1:"BIOSBOOT" \
         --new=2:0:0 --typecode=2:8300 --change-name=2:"ROOT" \
@@ -133,7 +132,7 @@ btrfs subvolume create /mnt/@var_cache
 umount /mnt
 
 mount -o subvol=@,compress=zstd "$ROOT_PART" /mnt
-mkdir -p /mnt/{boot,home,.snapshots,var/log,var/cache}
+mkdir -p /mnt/{boot,home,.snapshots,var/log,var/cache,var/cache/pacman/pkg}
 if [[ "$IS_UEFI" = true ]]; then
     mount "$BOOT_PART" /mnt/boot
 fi
@@ -142,13 +141,18 @@ mount -o subvol=@snapshots,compress=zstd "$ROOT_PART" /mnt/.snapshots
 mount -o subvol=@var_log,compress=zstd "$ROOT_PART" /mnt/var/log
 mount -o subvol=@var_cache,compress=zstd "$ROOT_PART" /mnt/var/cache
 
-echo "=== Step 4: Speeding up Pacman (ParallelDownloads) ==="
+echo "=== Step 4: Fix Pacman Cache and CheckSpace on Live System ==="
+sed -i 's/^CheckSpace/#CheckSpace/' /etc/pacman.conf || true
 sed -i 's/^#ParallelDownloads = 5/ParallelDownloads = 5/' /etc/pacman.conf || true
 
-echo "=== Step 5: pacstrap packages (using local ISO cache -c) ==="
+# Tạo thư mục và trỏ cache tải về vào chính ổ đĩa đích /mnt để không bị tràn RAM Live ISO
+mkdir -p /mnt/var/cache/pacman/pkg
+mount --bind /mnt/var/cache/pacman/pkg /var/cache/pacman/pkg
+
+echo "=== Step 5: pacstrap packages ==="
 pacstrap -c -K /mnt \
-    base base-devel linux linux-firmware \
-    networkmanager sudo zsh git \
+    base linux linux-firmware \
+    base-devel networkmanager sudo zsh git \
     grub efibootmgr \
     btrfs-progs snapper \
     hyprland kitty \
@@ -215,7 +219,7 @@ home="/home/$user"
 export HOME="$home"
 cd "$home"
 
-# Install paru-bin (nhanh hơn tự compile paru bằng rust rất nhiều)
+# Install paru-bin
 rm -rf "$home/paru-bin"
 runuser -u "$user" -- git clone --depth=1 https://aur.archlinux.org/paru-bin.git "$home/paru-bin"
 cd "$home/paru-bin"
@@ -232,7 +236,7 @@ arch-chroot /mnt /root/build-aur.sh "$USERNAME" || true
 rm -f /mnt/root/build-aur.sh
 
 echo "=== Step 11: Configuring Snapper ==="
-umount /mnt/.snapshots || true
+umount /mnt/.snapshots 2>/dev/null || true
 rm -rf /mnt/.snapshots
 arch-chroot /mnt snapper -c root create-config / || true
 btrfs subvolume delete /mnt/.snapshots 2>/dev/null || true
@@ -245,6 +249,9 @@ arch-chroot /mnt systemctl enable NetworkManager.service
 arch-chroot /mnt systemctl enable snapper-timeline.timer || true
 arch-chroot /mnt systemctl enable snapper-cleanup.timer || true
 arch-chroot /mnt systemctl set-default graphical.target
+
+# Bỏ bind mount cache khi xong
+umount /var/cache/pacman/pkg 2>/dev/null || true
 
 echo "=== Installation Finished ==="
 run_zenity --info \
