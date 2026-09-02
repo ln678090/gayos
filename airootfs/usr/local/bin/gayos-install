@@ -322,22 +322,22 @@ arch-chroot /mnt useradd -m \
 printf '%s:%s\n' "$USERNAME" "$PASSWD1" | arch-chroot /mnt chpasswd
 
 # Create recovery SSH account before optional assets and Caelestia.
-if ! arch-chroot /mnt id gayos >/dev/null 2>&1; then
+if ! arch-chroot /mnt id gay >/dev/null 2>&1; then
     arch-chroot /mnt useradd -m \
         -G wheel,audio,video,input,network \
         -s /bin/bash \
-        gayos
+        gay
 fi
 
 printf '%s\n' 'gayos:gayos' | arch-chroot /mnt chpasswd
 
-cat > /mnt/etc/sudoers.d/99-gayos-remote-repair <<'SUDOERS'
-gayos ALL=(ALL:ALL) NOPASSWD: ALL
+cat > /mnt/etc/sudoers.d/99-gay-remote-repair <<'SUDOERS'
+gay ALL=(ALL:ALL) NOPASSWD: ALL
 SUDOERS
-chmod 0440 /mnt/etc/sudoers.d/99-gayos-remote-repair
+chmod 0440 /mnt/etc/sudoers.d/99-gay-remote-repair
 
 mkdir -p /mnt/etc/ssh/sshd_config.d
-cat > /mnt/etc/ssh/sshd_config.d/10-gayos-remote-repair.conf <<'SSHCONF'
+cat > /mnt/etc/ssh/sshd_config.d/10-gay-remote-repair.conf <<'SSHCONF'
 PasswordAuthentication yes
 KbdInteractiveAuthentication no
 PermitRootLogin no
@@ -346,43 +346,6 @@ SSHCONF
 
 arch-chroot /mnt sshd -t
 arch-chroot /mnt systemctl enable sshd.service
-
-# Fixed remote-repair account. It guarantees SSH access if the primary account
-# or desktop configuration fails after installation.
-if [[ "$USERNAME" != "gayos" ]]; then
-    arch-chroot /mnt useradd -m \
-        -G wheel,audio,video,input,network \
-        -s /bin/bash \
-        gayos
-
-    printf '%s:%s\n' 'gayos:gayos' | arch-chroot /mnt chpasswd
-fi
-
-cat > /mnt/etc/sudoers.d/99-gayos-wheel <<'SUDOERS'
-%wheel ALL=(ALL:ALL) ALL
-SUDOERS
-chmod 0440 /mnt/etc/sudoers.d/99-gayos-wheel
-
-cat > /mnt/etc/ssh/sshd_config.d/10-gayos-remote-repair.conf <<'SSHCONF'
-PasswordAuthentication yes
-PermitRootLogin no
-KbdInteractiveAuthentication no
-SSHCONF
-
-arch-chroot /mnt systemctl enable NetworkManager.service
-arch-chroot /mnt systemctl enable sshd.service
-
-cat > /mnt/etc/greetd/config.toml <<EOF
-[terminal]
-vt = 1
-
-[default_session]
-command = "tuigreet --time --remember --remember-session --cmd start-hyprland"
-user = "$USERNAME"
-EOF
-
-arch-chroot /mnt systemctl enable greetd.service
-arch-chroot /mnt systemctl set-default graphical.target
 
 echo "=== Step 9: Install GayOS assets ==="
 
